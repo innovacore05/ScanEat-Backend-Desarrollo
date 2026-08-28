@@ -3,6 +3,27 @@
 
 import nodemailer from 'nodemailer';
 
+
+
+
+
+
+
+
+console.log('[SMTP CONFIG]', {
+  host: process.env.SMTP_HOST,
+  port: process.env.SMTP_PORT,
+  secure: process.env.SMTP_SECURE,
+  user: process.env.SMTP_USER,
+  passwordExists: !!process.env.SMTP_PASSWORD,
+  from: process.env.SMTP_FROM,
+});
+
+
+
+
+
+
 function createTransporter() {
   if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
     return null;
