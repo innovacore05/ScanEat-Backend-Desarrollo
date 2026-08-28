@@ -48,12 +48,5 @@ export async function sendVerificationEmail({ to, code }: { to: string; code: st
   });
 
 
-transporter.verify((error, success) => {
-    if (error) {
-        console.error("SMTP ERROR:", error);
-    } else {
-        console.log("SMTP READY:", success);
-    }
-});
 
 }
