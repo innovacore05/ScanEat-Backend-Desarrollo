@@ -12,6 +12,7 @@ function createTransporter() {
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT || 587),
     secure: String(process.env.SMTP_SECURE).toLowerCase() === 'true',
+    
     connectionTimeout: 10000,
     greetingTimeout: 10000,
     socketTimeout: 10000,
@@ -45,4 +46,14 @@ export async function sendVerificationEmail({ to, code }: { to: string; code: st
       </div>
     `,
   });
+
+
+transporter.verify((error, success) => {
+    if (error) {
+        console.error("SMTP ERROR:", error);
+    } else {
+        console.log("SMTP READY:", success);
+    }
+});
+
 }
