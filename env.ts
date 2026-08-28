@@ -22,16 +22,12 @@ import { z } from 'zod';
     The process object provides information about, and control over, the current Node.js process. It represents the running instance of your Node.js application. Think of it as a bridge between your JavaScript code and the underlying operating system.
 */
 
-const isProduction = process.env.APP_STAGE === 'production';
-const isDevelopment = process.env.APP_STAGE === 'dev';
-const isTesting = process.env.APP_STAGE === 'test';
+
 
 // Solo para decidir qué .env cargar; no modifica process.env.APP_STAGE
 const currentStage = process.env.APP_STAGE || 'dev';
 
-if (currentStage === 'production') { 
-    loadEnv('production');
-} else if (currentStage === 'dev') {
+if (currentStage === 'dev') {
     loadEnv();
 } else if (currentStage === 'test') {
     loadEnv('test');
@@ -63,6 +59,14 @@ const envSchema = z.object({
     JWT_EXPIRES_IN: z.string().default('1h'),
 
     BCRYPT_ROUNDS: z.coerce.number().positive().min(1).max(20).default(12),
+
+SMTP_HOST: z.string(),
+SMTP_PORT: z.coerce.number().positive().default(587),
+SMTP_SECURE: z.coerce.boolean().default(false),
+SMTP_USER: z.string(),
+SMTP_PASSWORD: z.string(),
+SMTP_FROM: z.string(),
+
 });
 
 /*
