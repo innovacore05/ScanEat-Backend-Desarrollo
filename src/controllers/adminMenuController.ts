@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
-import { and, eq,ilike, or } from "drizzle-orm";
+import { and, eq,ilike, or , sql} from "drizzle-orm";
 import { db } from "../db/connection";
-import { products,categories } from "../db/schemas/menuschema";
+import { products,categories } from "../db/schemas/adminMenuSchema";
 
 
 
@@ -11,8 +11,9 @@ export const getProducts= async (req:Request,res:Response)=>{
 
 try{ 
 
-const {category,search}=req.query;
-
+const { category, search, limit, offset } = req.query;
+const limitNum = limit ? Number(limit) : 10;
+		const offsetNum = offset ? Number(offset) : 0;
 const result=await db
 .select({
 
@@ -31,11 +32,15 @@ const result=await db
     and(
         category ? eq (products.categoryId,Number(category)):undefined,
         search ? or(
-        ilike (products.productName, `%${search}%`),
-        ilike(categories.name, `%${search}%`)
-        ):undefined
+								sql`unaccent(${products.productName}) ILIKE unaccent(${`%${search}%`})`,
+								sql`unaccent(${categories.name}) ILIKE unaccent(${`%${search}%`})`
+							)
+						: undefined
     )
-    );
+    )
+    .orderBy(products.productId)
+			.limit(limitNum)
+			.offset(offsetNum);
 
 
     const formatted =result.map((p)=>({
@@ -44,7 +49,10 @@ const result=await db
         rating:Number(p.rating),
     }));
 
-  res.status(200).json(formatted);
+ res.status(200).json({
+			products: formatted,
+			hasMore: formatted.length === limitNum,
+		});
 }catch (error){
     console.error("Error fetching products:",error);
     res.status(500).json({message:"Error al obtener los productos"});
@@ -53,7 +61,6 @@ const result=await db
 
 
 //obtener producto por id 
-
 export const getProductsById=async(req:Request,res:Response)=>{
     try{
         const {id}=req.params;

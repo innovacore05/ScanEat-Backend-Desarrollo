@@ -14,7 +14,7 @@ export const categories = pgTable("categories",{
 
     export const products=pgTable("products",{
         productId:serial("product_id").primaryKey(),
-        productName:varchar("product_name",{length:100}).notNull(),
+        productName:varchar("product_name",{length:225}).notNull(),
         image: varchar("image",{length:225}),
         description:text("description"),
         price:numeric("price",{precision:10,scale:2}).notNull(),
@@ -33,3 +33,22 @@ export const categories = pgTable("categories",{
             references:[categories.categoryId],
         }),
     }));
+
+
+    export const categoriesRelations =relations(categories,({many})=>({
+        products:many(products),
+    }));
+
+
+    //zod schema
+
+    export const insertCategorySchema=createInsertSchema(categories);
+    export const inselectCategorySchema=createSelectSchema(categories);
+    export const insertProductSchema=createInsertSchema(products);
+    export const selectProductSchema=createInsertSchema(products);
+
+
+export const menuSearchQuerySchema=z.object({
+    q:z.string().optional(),
+    category:z.string().optional(),
+});
