@@ -2,10 +2,10 @@ import app from './src/app';
 import env from './env';
 import authRoutes from './src/routes/authRoutes';
 import { Request,Response,NextFunction } from 'express';
-
+import menuRoutes from './src/routes/menuRoutes';
 
 app.use('/api/auth', authRoutes);
-
+app.use("/api/menu",menuRoutes);
 
 
 app.use('/api', (req, res) =>{
