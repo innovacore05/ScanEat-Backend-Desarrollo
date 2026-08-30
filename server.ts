@@ -3,9 +3,11 @@ import env from './env';
 import authRoutes from './src/routes/authRoutes';
 import { Request,Response,NextFunction } from 'express';
 import menuRoutes from './src/routes/menuRoutes';
+import mesaRoutes from './src/routes/mesaRoutes';
 
 app.use('/api/auth', authRoutes);
 app.use("/api/menu",menuRoutes);
+app.use('/api/table', mesaRoutes);
 
 
 app.use('/api', (req, res) =>{
