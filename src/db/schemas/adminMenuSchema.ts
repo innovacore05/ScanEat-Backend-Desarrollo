@@ -19,6 +19,7 @@ export const categories = pgTable("categories",{
         description:text("description"),
         price:numeric("price",{precision:10,scale:2}).notNull(),
         rating: numeric("rating",{precision:2,scale:1}).default("0.0"),
+        discount: numeric("discount", {precision: 5,scale: 2,}).default("0.00"),
        categoryId:integer("category_id")
        .notNull()
        .references(()=>categories.categoryId),
@@ -45,7 +46,7 @@ export const categories = pgTable("categories",{
     export const insertCategorySchema=createInsertSchema(categories);
     export const inselectCategorySchema=createSelectSchema(categories);
     export const insertProductSchema=createInsertSchema(products);
-    export const selectProductSchema=createInsertSchema(products);
+    export const selectProductSchema = createSelectSchema(products);
 
 
 export const menuSearchQuerySchema=z.object({
