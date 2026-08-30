@@ -87,3 +87,77 @@ res.status(200).json(product);
         res.status(500).json({message:"Error al obtener el producto"});
     }
 };
+
+
+//agregar producto simple 
+export const createProduct = async (req: Request, res: Response) => {
+    try {
+        const {
+            productName,
+            description,
+            price,
+            discount,
+            categoryId,
+        } = req.body;
+
+        // Validar campos obligatorios
+        if (!productName || !price || !categoryId) {
+            return res.status(400).json({
+                message: "El nombre, precio y categoría son requeridos",
+            });
+        }
+
+        // Verificar que la categoría exista
+        const [category] = await db
+            .select()
+            .from(categories)
+            .where(eq(categories.categoryId, Number(categoryId)))
+            .limit(1);
+
+        if (!category) {
+            return res.status(400).json({
+                message: "La categoría seleccionada no existe",
+            });
+        }
+
+        // Obtener la ruta de la imagen
+        const imagePath = req.file
+            ? `/uploads/${req.file.filename}`
+            : null;
+
+        // Crear producto
+        const [newProduct] = await db
+            .insert(products)
+            .values({
+                productName: String(productName).trim(),
+                description: description
+                    ? String(description).trim()
+                    : null,
+                price: String(price),
+                discount:
+                    discount !== undefined && discount !== ""
+                        ? String(discount)
+                        : "0",
+                categoryId: Number(categoryId),
+                image: imagePath,
+                rating: "0.0",
+            })
+            .returning();
+
+        return res.status(201).json({
+            message: "Producto creado correctamente",
+            product: {
+                ...newProduct,
+                price: Number(newProduct.price),
+                discount: Number(newProduct.discount),
+                rating: Number(newProduct.rating),
+            },
+        });
+    } catch (error) {
+        console.error("Error creating product:", error);
+
+        return res.status(500).json({
+            message: "Error al crear el producto",
+        });
+    }
+};

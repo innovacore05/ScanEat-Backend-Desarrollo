@@ -28,6 +28,7 @@
     "express-rate-limit": "^8.6.2",
     "helmet": "^8.2.0",
     "jose": "^6.2.3",
+    "multer": "^2.3.0",
     "nodemailer": "^9.0.5",
     "pg": "^8.21.0"
   },
@@ -36,6 +37,7 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/morgan": "^1.9.10",
+    "@types/multer": "^2.2.0",
     "@types/node": "^25.8.0",
     "custom-env": "^2.0.6",
     "drizzle-kit": "^0.31.10",
