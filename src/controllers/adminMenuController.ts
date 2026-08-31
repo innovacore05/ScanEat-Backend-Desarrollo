@@ -1,7 +1,14 @@
 import { Request, Response } from "express";
 import { and, eq,ilike, or , sql} from "drizzle-orm";
 import { db } from "../db/connection";
-import { products,categories } from "../db/schemas/adminMenuSchema";
+import {
+  products,
+  categories,
+  modifierGroups,
+  modifierOptions,
+} from "../db/schemas/adminMenuSchema";
+import { CreateCustomDishInput } from "../db/schemas/adminMenuSchema";
+import { uploadImageToStorage } from "../services/storage.service";
 
 
 
@@ -88,6 +95,19 @@ res.status(200).json(product);
     }
 };
 
+//obtener categorias
+export const getCategories = async (req: Request, res: Response) => {
+  try {
+    const result = await db.select().from(categories).orderBy(categories.name);
+    res.status(200).json(result);
+  } catch (error) {
+    console.error("Error fetching categories:", error);
+    res.status(500).json({ message: "Error al obtener las categorías" });
+  }
+};
+
+
+
 
 //agregar producto simple 
 export const createProduct = async (req: Request, res: Response) => {
@@ -119,11 +139,12 @@ export const createProduct = async (req: Request, res: Response) => {
                 message: "La categoría seleccionada no existe",
             });
         }
-
-        // Obtener la ruta de la imagen
-        const imagePath = req.file
-            ? `/uploads/${req.file.filename}`
-            : null;
+//CAMBIO DE GUARDADO DE LOCAL A R2
+        // subir la imagen a r2 cloudflare
+        let imageUrl: string | null = null;
+        if (req.file) {
+            imageUrl = await uploadImageToStorage(req.file, "products");
+        }
 
         // Crear producto
         const [newProduct] = await db
@@ -139,7 +160,7 @@ export const createProduct = async (req: Request, res: Response) => {
                         ? String(discount)
                         : "0",
                 categoryId: Number(categoryId),
-                image: imagePath,
+                image: imageUrl,
                 rating: "0.0",
             })
             .returning();
@@ -160,4 +181,80 @@ export const createProduct = async (req: Request, res: Response) => {
             message: "Error al crear el producto",
         });
     }
+};
+
+//NUEVO /PARTE DEL CUSTOMDISH
+//agregar producto personalizado 
+export const createCustomDish = async (req: Request, res: Response) => {
+  try {
+    const data = req.body as CreateCustomDishInput;
+
+    // Categoria existe?
+    const [category] = await db
+      .select()
+      .from(categories)
+      .where(eq(categories.categoryId, data.categoryId))
+      .limit(1);
+
+    if (!category) {
+      return res.status(400).json({
+        message: "La categoría seleccionada no existe",
+      });
+    }
+
+    //subir imagen a r2
+    let imageUrl: string | null = null;
+    if (req.file) {
+      imageUrl = await uploadImageToStorage(req.file, "products");
+    }
+
+    const result = await db.transaction(async (tx) => {
+      const [newProduct] = await tx
+        .insert(products)
+        .values({
+          productName: data.name.trim(),
+          description: data.description ? data.description.trim() : null,
+          price: data.price.toString(),
+          discount: data.discount !== undefined ? data.discount.toString() : "0",
+          categoryId: data.categoryId,
+          image: imageUrl,
+          rating: "0.0",
+          isCustom: 1,
+        })
+        .returning();
+
+      for (const group of data.optionGroups) {
+        if (!group.name.trim()) continue;
+
+        const [createdGroup] = await tx
+          .insert(modifierGroups)
+          .values({ productId: newProduct.productId, name: group.name })
+          .returning();
+
+        const validOptions = group.options.filter((o) => o.trim() !== "");
+        if (validOptions.length > 0) {
+          await tx.insert(modifierOptions).values(
+            validOptions.map((name) => ({ groupId: createdGroup.id, name }))
+          );
+        }
+      }
+
+      return newProduct;
+    });
+
+    return res.status(201).json({
+      message: "Platillo personalizado creado correctamente",
+      product: {
+        ...result,
+        price: Number(result.price),
+        discount: Number(result.discount),
+        rating: Number(result.rating),
+      },
+    });
+  } catch (error) {
+    console.error("Error creating custom dish:", error);
+    return res.status(500).json({
+      message: "Error al crear el platillo personalizado",
+    });
+  }
 };
