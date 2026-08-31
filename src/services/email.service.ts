@@ -52,7 +52,7 @@
 
 // }
 
-
+//revision de backend
 
 
 const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
