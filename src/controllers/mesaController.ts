@@ -38,54 +38,45 @@ export const createTable = async (req: Request, res: Response) => {
   }
 };
 
-
-export const getTables = async (req: Request, res: Response) => {
+export const getTables = async (_req: Request, res: Response) => {
   try {
-    const mesas = await db
+    const mesaList = await db
       .select()
-      .from(tables);
+      .from(tables)
+      .orderBy(tables.tableNumber);
 
-    return res.status(200).json(
-      mesas.map((mesa) => ({
-        id: mesa.id,
-        tableNumber: mesa.tableNumber,
-        chairNumber: mesa.chairNumber,
-        active: mesa.active,
-        createdAt: mesa.createdAt,
-      }))
-    );
+    return res.status(200).json(mesaList);
   } catch (error) {
-    console.error("Error consultando mesas:", error);
+    console.error("Error obteniendo mesas:", error);
 
     return res.status(500).json({
-      message: "Error al consultar las mesas",
+      message: "No se pudieron obtener las mesas",
     });
   }
 };
 
 export const getTableById = async (req: Request, res: Response) => {
   try {
-    const parsed = tableParamsSchema.parse(req.params);
+    const { id } = tableParamsSchema.parse(req.params);
 
     const [mesa] = await db
       .select()
       .from(tables)
-      .where(eq(tables.id, parsed.id))
+      .where(eq(tables.id, id))
       .limit(1);
 
     if (!mesa) {
-      return res.status(404).json({ message: "Mesa no encontrada" });
+      return res.status(404).json({
+        message: "Mesa no encontrada",
+      });
     }
 
-    return res.status(200).json({
-      id: mesa.id,
-      tableNumber: mesa.tableNumber,
-      chairNumber: mesa.chairNumber,
-      active: mesa.active,
-      createdAt: mesa.createdAt,
-    });
+    return res.status(200).json(mesa);
   } catch (error) {
-    console.error("Error consultando mesa:", error);
-    return res.status(500).json({ message: "Error al consultar la mesa" });
+    console.error("Error obteniendo mesa:", error);
+
+    return res.status(500).json({
+      message: "No se pudo obtener la mesa",
+    });
   }
 };
