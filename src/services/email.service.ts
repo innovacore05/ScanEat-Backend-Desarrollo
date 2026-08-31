@@ -52,7 +52,7 @@
 
 // }
 
-//revision de backend
+// revision de backeen , actualizacion de aws sdk client -s3, actualizacion 2 para railway
 
 
 const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
