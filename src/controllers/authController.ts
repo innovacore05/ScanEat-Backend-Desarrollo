@@ -532,13 +532,25 @@ export const verifyLoginCode = async (req: Request, res: Response) => {
       role_id: user.role_id,
     });
 
+
+    
     await db
     .delete(loginVerifications)
     .where(eq(loginVerifications.user_id, user.user_id));
 
+//Cambio de guardado de token local a galletas
+//isProd:
+res.cookie('authToken',token,{
+  httpOnly:true,
+  secure:isProd(),
+  sameSite:"lax",
+  maxAge:60*60*1000,
+  path:'/',
+});
+
+
     return res.status(200).json({
       message: "Inicio de sesión exitoso",
-      token,
       user: {
         userId: user.user_id,
         email: user.email,

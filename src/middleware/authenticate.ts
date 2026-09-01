@@ -11,23 +11,23 @@ export const authenticate = async (
   next: NextFunction
 ) => {
   try {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    //cambio
+    const token=req.cookies?.authToken;
+    if(!token){
       return res.status(401).json({
-        message: "Token required",
+        message:"Token required",
       });
     }
 
-    const token = authHeader.slice(7).trim();
-
-    const payload = await verifyToken(token);
-
-    req.user = payload;
-    next();
-  } catch {
+const payload = await verifyToken(token);
+req.user=payload;
+next();
+  }catch{
     return res.status(401).json({
-      message: "Invalid token",
+      message:"Invalid token",
     });
   }
 };
+//INSTALAR
+  //    npm install cookie-parser
+  //  npm install -D @types/cookie-parser

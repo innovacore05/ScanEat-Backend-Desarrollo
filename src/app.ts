@@ -1,7 +1,7 @@
 import cors from 'cors';
 import express, { Application } from 'express';
 import path from 'path';
-
+import cookieParser from 'cookie-parser';
 import morgan from 'morgan';
 import helmet from 'helmet';
 
@@ -9,6 +9,9 @@ const app: Application = express();
 
 app.set('trust proxy', 1);
 
+
+
+app.use(cookieParser()); // cambio
 
 //para produccion , cuando se necesite subir el proyecto a los servicios de hosting correspondientes
 //configurar las variables de entorno en cada plataforma

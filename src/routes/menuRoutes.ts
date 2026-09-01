@@ -28,8 +28,7 @@ router.get("/categories", getCategories);
 
 //CAMBIO:uploadMemory 
 //platillo simple 
-router.post("/products", uploadMemory.single("image"), createProduct);
-
+router.post("/products", authenticate, uploadMemory.single("image"), createProduct);
 //platillo personalzado
 router.post("/products/custom",authenticate,uploadMemory.single("image"),parseFormDataJson(["optionGroups"]),validateBody(createCustomDishSchema),createCustomDish);
 
