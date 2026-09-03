@@ -52,6 +52,8 @@ export async function sendVerificationEmail({ to, code }:
 
 }
 
+//ESTE CODIGO ES PARA HOSTING NADA MAS
+
 // revision de backeen , actualizacion de aws sdk client -s3, actualizacion 2 para railway
 
 

@@ -26,7 +26,7 @@ router.get("/products",getProducts);
 router.get("/products/:id",getProductsById);
 router.get("/categories", getCategories);
 
-//CAMBIO:uploadMemory 
+//CAMBIO:uploadMemory y authentcate
 //platillo simple 
 router.post("/products", authenticate, uploadMemory.single("image"), createProduct);
 //platillo personalzado
