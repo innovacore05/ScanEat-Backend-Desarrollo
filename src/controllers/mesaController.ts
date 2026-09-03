@@ -1,7 +1,12 @@
 import { Request, Response } from "express";
 import { eq } from "drizzle-orm";
 import { db } from "../db/connection";
-import { createTableSchema, tables, tableParamsSchema } from "../db/schemas/mesaSchema";
+import {
+  createTableSchema,
+  tables,
+  tableParamsSchema,
+  updateTableChairsSchema,
+} from "../db/schemas/mesaSchema";
 import { validateBody, validateParams } from "../middleware/validations";
 
 export const createTable = async (req: Request, res: Response) => {
@@ -80,3 +85,59 @@ export const getTableById = async (req: Request, res: Response) => {
     });
   }
 };
+
+//controller para actualizar la cantidad de sillas de una mesa
+export const updateTableChairs = async (req: Request, res: Response) => {
+  try {
+    const { id } = tableParamsSchema.parse(req.params);
+    const { chairNumber } = updateTableChairsSchema.parse(req.body);
+
+    const [mesa] = await db
+      .update(tables)
+      .set({ chairNumber })
+      .where(eq(tables.id, id))
+      .returning();
+
+    if (!mesa) {
+      return res.status(404).json({
+        message: "Mesa no encontrada",
+      });
+    }
+
+    return res.status(200).json(mesa);
+  } catch (error) {
+    console.error("Error actualizando mesa:", error);
+
+    return res.status(500).json({
+      message: "No se pudo actualizar la mesa",
+    });
+  }
+};
+
+//controller para eliminar una mesa
+export const deleteTable = async (req: Request, res: Response) => {
+  try {
+    const { id } = tableParamsSchema.parse(req.params);
+
+    const [mesa] = await db
+      .delete(tables)
+      .where(eq(tables.id, id))
+      .returning();
+
+    if (!mesa) {
+      return res.status(404).json({
+        message: "Mesa no encontrada",
+      });
+    }
+
+    return res.status(200).json({
+      message: "Mesa eliminada correctamente",
+    });
+  } catch (error) {
+    console.error("Error eliminando mesa:", error);
+
+    return res.status(500).json({
+      message: "No se pudo eliminar la mesa",
+    });
+  }
+}
