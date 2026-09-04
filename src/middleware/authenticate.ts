@@ -30,11 +30,13 @@ if (!token) {
 
     req.user = payload;
     next();
-  } catch {
-    return res.status(401).json({
-      message:"Invalid token",
-    });
-  }
+ } catch (error) {
+  console.error("Error al verificar token:", error);
+
+  return res.status(401).json({
+    message: "Invalid token",
+  });
+}
 };
 //INSTALAR
   //    npm install cookie-parser
