@@ -43,3 +43,4 @@ export async function sendVerificationEmail({ to, code }: { to: string; code: st
     `,
   });
 }
+

@@ -22,6 +22,7 @@
     "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.20.0",
     "bcrypt": "^6.0.0",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "drizzle-orm": "^0.45.2",
     "drizzle-zod": "^0.8.3",
@@ -31,10 +32,12 @@
     "jose": "^6.2.3",
     "multer": "^2.3.0",
     "nodemailer": "^9.0.5",
-    "pg": "^8.21.0"
+    "pg": "^8.21.0",
+    "sharp": "^0.35.4"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
+    "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/morgan": "^1.9.10",
