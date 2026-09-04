@@ -21,6 +21,10 @@ export const createTableSchema = z.object({
     .positive("El número de sillas debe ser mayor que cero"),
 });
 
+export const updateTableChairsSchema = createTableSchema.pick({
+  chairNumber: true,
+});
+
 export const tableParamsSchema = z.object({
   id: z.uuid("El identificador de mesa no es válido"),
 });
