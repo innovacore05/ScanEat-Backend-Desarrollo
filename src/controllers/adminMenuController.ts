@@ -6,8 +6,6 @@ import {
   categories,
   modifierGroups,
   modifierOptions,
-  createProductSchema,
-  createCustomDishSchema,
   type CreateProductInput, 
 
 } from "../db/schemas/adminMenuSchema";
@@ -330,7 +328,7 @@ export const updateProduct = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Producto no encontrado" });
     }
 
-    const productName = normaliseProductName(req.body?.name ?? req.body?.name);
+    const productName = normaliseProductName(req.body?.name);
     const description = req.body?.description ?? existingProduct.description;
     const categoryId = Number(req.body?.categoryId ?? existingProduct.categoryId);
     const price = normalisePrice(req.body?.price ?? existingProduct.price);
