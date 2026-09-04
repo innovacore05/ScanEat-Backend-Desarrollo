@@ -32,15 +32,13 @@ router.get("/categories", getCategories);
 //CAMBIO:uploadMemory 
 //platillo simple 
 
-router.post("/products",//authenticate,
-  uploadMemory.single("image"),validateBody(createProductSchema),createProduct);
+router.post("/products",authenticate,uploadMemory.single("image"),validateBody(createProductSchema),createProduct);
 router.put("/products/:id",authenticate, uploadMemory.single("image"), updateProduct);
 router.patch("/products/:id",authenticate, uploadMemory.single("image"), updateProduct);
 router.delete("/products/:id",authenticate, deleteProduct);
 
 //platillo personalzado
-router.post("/products/custom",//authenticate,
-  uploadMemory.single("image"),parseFormDataJson(["optionGroups"]),validateBody(createCustomDishSchema),createCustomDish);
+router.post("/products/custom",authenticate,uploadMemory.single("image"),parseFormDataJson(["optionGroups"]),validateBody(createCustomDishSchema),createCustomDish);
 router.put("/products/custom/:id", authenticate, uploadMemory.single("image"), parseFormDataJson(["optionGroups"]), updateCustomDish);
 router.patch("/products/custom/:id", authenticate, uploadMemory.single("image"), parseFormDataJson(["optionGroups"]), updateCustomDish);
 router.delete("/products/custom/:id", authenticate, deleteCustomProduct);
