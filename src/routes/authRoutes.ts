@@ -30,7 +30,7 @@ import {
   
 } from "../middleware/rateLimiter";
 
-
+//actualizacion de baackend
 const router = Router();
 
 router.post("/register", registerLimiter, validateBody(registerUserSchema), register);
