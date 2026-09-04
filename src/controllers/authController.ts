@@ -531,6 +531,12 @@ export const verifyLoginCode = async (req: Request, res: Response) => {
       email: user.email,
       role_id: user.role_id,
     });
+    //agregado
+    res.cookie("token", token, {
+  httpOnly: true,
+  secure: false,
+  sameSite: "lax",
+});
 
 
     

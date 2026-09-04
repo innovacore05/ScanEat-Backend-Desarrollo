@@ -11,18 +11,26 @@ export const authenticate = async (
   next: NextFunction
 ) => {
   try {
-    //cambio
-    const token=req.cookies?.authToken;
-    if(!token){
+    // const authHeader = req.headers.authorization;
+    const token = req.cookies?.token;
+
+    // if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    //   return res.status(401).json({
+    //     message: "Token required",
+    //   });
+    // }
+
+    // const token = authHeader.slice(7).trim();
+if (!token) {
       return res.status(401).json({
         message:"Token required",
       });
     }
+    const payload = await verifyToken(token);
 
-const payload = await verifyToken(token);
-req.user=payload;
-next();
-  }catch{
+    req.user = payload;
+    next();
+  } catch {
     return res.status(401).json({
       message:"Invalid token",
     });

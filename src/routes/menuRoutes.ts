@@ -10,17 +10,23 @@ import {
   deleteProduct,
   deleteCustomProduct,
 } from "../controllers/adminMenuController";
-import { upload } from "../middleware/upload";
+
 import { validateBody } from "../middleware/validations";
 import { parseFormDataJson } from "../middleware/parseFormDataJson";
-import { createCustomDishSchema } from "../db/schemas/adminMenuSchema";
+import { createCustomDishSchema , createProductSchema} from "../db/schemas/adminMenuSchema";
 import { authenticate } from "../middleware/authenticate";
 import multer from "multer";
 
 //R2
 const uploadMemory = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 },
+ limits: { fileSize: 1 * 1024 * 1024 },
+ fileFilter:(req,file,cb)=>{
+  if(!file.mimetype.startsWith("image/")){
+    return cb(new Error("El archivo debe ser una iamgen"));
+  }
+  cb(null,true);
+ }
 });
 
 const router = Router();
@@ -31,13 +37,15 @@ router.get("/categories", getCategories);
 
 //CAMBIO:uploadMemory y authentcate
 //platillo simple 
-router.post("/products", uploadMemory.single("image"), createProduct);
-router.put("/products/:id", uploadMemory.single("image"), updateProduct);
-router.patch("/products/:id", uploadMemory.single("image"), updateProduct);
-router.delete("/products/:id", deleteProduct);
+router.post("/products", authenticate, 
+  uploadMemory.single("image"),validateBody(createProductSchema),createProduct);
+router.put("/products/:id", authenticate, uploadMemory.single("image"), updateProduct);
+router.patch("/products/:id", authenticate, uploadMemory.single("image"), updateProduct);
+router.delete("/products/:id", authenticate, deleteProduct);
 
 //platillo personalzado
-router.post("/products/custom",authenticate,uploadMemory.single("image"),parseFormDataJson(["optionGroups"]),validateBody(createCustomDishSchema),createCustomDish);
+router.post("/products/custom",authenticate,
+  uploadMemory.single("image"),parseFormDataJson(["optionGroups"]),validateBody(createCustomDishSchema),createCustomDish);
 router.put("/products/custom/:id", authenticate, uploadMemory.single("image"), parseFormDataJson(["optionGroups"]), updateCustomDish);
 router.patch("/products/custom/:id", authenticate, uploadMemory.single("image"), parseFormDataJson(["optionGroups"]), updateCustomDish);
 router.delete("/products/custom/:id", authenticate, deleteCustomProduct);
