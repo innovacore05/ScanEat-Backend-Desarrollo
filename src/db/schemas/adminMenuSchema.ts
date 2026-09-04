@@ -98,20 +98,27 @@ export const menuSearchQuerySchema = z.object({
   category: z.string().optional(),
 });
 
+//schemas de productos
+
+const baseDishSchema = z.object({
+  name: z.string().min(1, "El nombre es obligatorio"),
+  description: z.string().min(1, "La descripción es obligatoria"),
+  price: z.coerce.number().positive("Ingresa un precio válido"),
+  categoryId: z.coerce.number().int().positive("Selecciona una categoría"),
+  discount: z.coerce.number().min(0).optional(),
+});
+
 const optionGroupSchema = z.object({
-  name: z.string().min(1, "El grupo necesita un nombre").max(100),
-  options: z.array(z.string().min(1)).default([]),
+  name: z.string().trim().min(1, "Todos los grupos de opciones deben tener un nombre"),
+  options: z
+    .array(z.string().trim().min(1, "Todas las opciones deben tener un valor"))
+    .min(1, "Todos los grupos de opciones deben tener al menos una opción"),
 });
 
-export const createCustomDishSchema = z.object({
-  name: z.string().min(1, "El nombre es requerido").max(100),
-  description: z.string().max(500).optional(),
-  price: z.coerce.number().positive("El precio debe ser mayor a 0"),
-  categoryId: z.coerce.number().int().positive("La categoría es requerida"),
-  discount: z.coerce.number().min(0).max(100).optional(),
-  optionGroups: z.array(optionGroupSchema).default([]),
-});
+export const createProductSchema = baseDishSchema;
+export type CreateProductInput = z.infer<typeof createProductSchema>;
 
+export const createCustomDishSchema = baseDishSchema.extend({
+  optionGroups: z.array(optionGroupSchema).min(1, "Ingresa al menos un grupo de opciones"),
+});
 export type CreateCustomDishInput = z.infer<typeof createCustomDishSchema>;
-
-//NUEVO,SCHEMA PARA PRODUCTO ???
