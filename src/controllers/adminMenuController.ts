@@ -6,10 +6,14 @@ import {
   categories,
   modifierGroups,
   modifierOptions,
+  createProductSchema,
+  createCustomDishSchema,
+  type CreateProductInput, 
+
 } from "../db/schemas/adminMenuSchema";
 import { CreateCustomDishInput } from "../db/schemas/adminMenuSchema";
 import {  deleteImageFromStorage, uploadImageToStorage} from "../services/storage.service";
-
+import { validateImage } from "../utils/imageValidation";
 
 
 //obtener los productos de la base de datos
@@ -181,28 +185,20 @@ const normaliseOptionGroups = (value: unknown) => {
 
 //agregar producto simple 
 export const createProduct = async (req: Request, res: Response) => {
-    try {
-        const {
-            productName,
-            description,
-            price,
-            discount,
-            categoryId,
-        } = req.body;
+    
+ try {
+    const data = req.body as CreateProductInput;
 
-        // Validar campos obligatorios
-        if (!productName || !price || !categoryId) {
-            return res.status(400).json({
-                message: "El nombre, precio y categoría son requeridos",
-            });
-        }
-
+    const imageError = validateImage(req.file);
+    if (imageError) {
+      return res.status(400).json({ message: imageError });
+    }
         // Verificar que la categoría exista
         const [category] = await db
             .select()
-            .from(categories)
-            .where(eq(categories.categoryId, Number(categoryId)))
-            .limit(1);
+      .from(categories)
+      .where(eq(categories.categoryId, data.categoryId))
+      .limit(1);
 
         if (!category) {
             return res.status(400).json({
@@ -211,27 +207,20 @@ export const createProduct = async (req: Request, res: Response) => {
         }
 //CAMBIO DE GUARDADO DE LOCAL A R2
         // subir la imagen a r2 cloudflare
-        let imageUrl: string | null = null;
-        if (req.file) {
-            imageUrl = await uploadImageToStorage(req.file, "products");
-        }
+        const imageUrl = await uploadImageToStorage(req.file!, "products");
 
-        // Crear producto
+
+        // Crear producto CAMBIO e el valor, desde data
         const [newProduct] = await db
             .insert(products)
             .values({
-                productName: String(productName).trim(),
-                description: description
-                    ? String(description).trim()
-                    : null,
-                price: String(price),
-                discount:
-                    discount !== undefined && discount !== ""
-                        ? String(discount)
-                        : "0",
-                categoryId: Number(categoryId),
-                image: imageUrl,
-                rating: "0.0",
+               productName: data.name,
+        description: data.description,
+        price: String(data.price),
+        discount: data.discount !== undefined ? String(data.discount) : "0",
+        categoryId: data.categoryId,
+        image: imageUrl,
+        rating: "0.0",
             })
             .returning();
 
@@ -257,9 +246,14 @@ export const createProduct = async (req: Request, res: Response) => {
 //agregar producto personalizado 
 export const createCustomDish = async (req: Request, res: Response) => {
   try {
+    // req.body ya viene validado y tipado por el middleware validateBody
     const data = req.body as CreateCustomDishInput;
 
-    // Categoria existe?
+    const imageError = validateImage(req.file);
+    if (imageError) {
+      return res.status(400).json({ message: imageError });
+    }
+
     const [category] = await db
       .select()
       .from(categories)
@@ -267,25 +261,19 @@ export const createCustomDish = async (req: Request, res: Response) => {
       .limit(1);
 
     if (!category) {
-      return res.status(400).json({
-        message: "La categoría seleccionada no existe",
-      });
+      return res.status(400).json({ message: "La categoría seleccionada no existe" });
     }
 
-    //subir imagen a r2
-    let imageUrl: string | null = null;
-    if (req.file) {
-      imageUrl = await uploadImageToStorage(req.file, "products");
-    }
+    const imageUrl = await uploadImageToStorage(req.file!, "products");
 
     const result = await db.transaction(async (tx) => {
       const [newProduct] = await tx
         .insert(products)
         .values({
-          productName: data.name.trim(),
-          description: data.description ? data.description.trim() : null,
-          price: data.price.toString(),
-          discount: data.discount !== undefined ? data.discount.toString() : "0",
+          productName: data.name,
+          description: data.description,
+          price: String(data.price),
+          discount: data.discount !== undefined ? String(data.discount) : "0",
           categoryId: data.categoryId,
           image: imageUrl,
           rating: "0.0",
@@ -294,19 +282,14 @@ export const createCustomDish = async (req: Request, res: Response) => {
         .returning();
 
       for (const group of data.optionGroups) {
-        if (!group.name.trim()) continue;
-
         const [createdGroup] = await tx
           .insert(modifierGroups)
           .values({ productId: newProduct.productId, name: group.name })
           .returning();
 
-        const validOptions = group.options.filter((o) => o.trim() !== "");
-        if (validOptions.length > 0) {
-          await tx.insert(modifierOptions).values(
-            validOptions.map((name) => ({ groupId: createdGroup.id, name }))
-          );
-        }
+        await tx.insert(modifierOptions).values(
+          group.options.map((name) => ({ groupId: createdGroup.id, name }))
+        );
       }
 
       return newProduct;
@@ -323,9 +306,7 @@ export const createCustomDish = async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error("Error creating custom dish:", error);
-    return res.status(500).json({
-      message: "Error al crear el platillo personalizado",
-    });
+    return res.status(500).json({ message: "Error al crear el platillo personalizado" });
   }
 };
 
@@ -349,7 +330,7 @@ export const updateProduct = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Producto no encontrado" });
     }
 
-    const productName = normaliseProductName(req.body?.productName ?? req.body?.name);
+    const productName = normaliseProductName(req.body?.name ?? req.body?.name);
     const description = req.body?.description ?? existingProduct.description;
     const categoryId = Number(req.body?.categoryId ?? existingProduct.categoryId);
     const price = normalisePrice(req.body?.price ?? existingProduct.price);
