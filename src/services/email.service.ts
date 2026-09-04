@@ -43,3 +43,58 @@ export async function sendVerificationEmail({ to, code }: { to: string; code: st
     `,
   });
 }
+
+//ESTE CODIGO ES PARA HOSTING NADA MAS
+
+// revision de backeen , actualizacion de aws sdk client -s3, actualizacion 2 para railway
+
+
+// const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
+
+// console.log('[BREVO CONFIG]', {
+//   apiKeyExists: !!process.env.BREVO_API_KEY,
+//   from: process.env.MAIL_FROM,
+// });
+
+// export async function sendVerificationEmail({ to, code }:
+//    { to: string; code: string }) {
+//   const apiKey = process.env.BREVO_API_KEY;
+
+//   if (!apiKey) {
+//     console.log(`\n[ScanEat] codigo de verificación para ${to}: ${code}\n`);
+//     return;
+//   }
+
+//   const response = await fetch(BREVO_API_URL, {
+//     method: 'POST',
+//     headers: {
+//       'Content-Type': 'application/json',
+//       'Accept': 'application/json',
+//       'api-key': apiKey,
+//     },
+//     body: JSON.stringify({
+//       sender: {
+//         name: "Scann'Eat",
+//         email: process.env.MAIL_FROM || 'innovacore05@gmail.com',
+//       },
+//       to: [{ email: to }],
+//       subject: "ScannEat - Código de verificación",
+//       textContent: `Tu código de verificación para Scann'Eat es: ${code}. Expira en 10 minutos.`,
+//       htmlContent: `
+//         <div style="font-family: Arial, sans-serif;">
+//           <h2>Scann'Eat</h2>
+//           <p>Tu código de verificación es:</p>
+//           <h1 style="letter-spacing: 8px;">${code}</h1>
+//           <p>Este código expira en 10 minutos.</p>
+//           <p>Si no solicitaste este código, por favor ignóralo.</p>
+//         </div>
+//       `,
+//     }),
+//   });
+
+//   if (!response.ok) {
+//     const errorBody = await response.text();
+//     console.error('Error al enviar código de verificación (Brevo API):', response.status, errorBody);
+//     throw new Error(`Brevo API error: ${response.status}`);
+//   }
+// }
