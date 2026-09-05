@@ -17,8 +17,8 @@ import {
 const router = Router();
 
 router.post("/", authenticate, requireRole(1), validateBody(createTableSchema), createTable);
-router.get("/", authenticate, requireRole(1, 3), getTables);
-router.get("/:id", authenticate, requireRole(1, 3), validateParams(tableParamsSchema), getTableById);
+router.get("/", authenticate, getTables);
+router.get("/:id", authenticate, validateParams(tableParamsSchema), getTableById);
 router.put(
   "/:id",
   authenticate,
