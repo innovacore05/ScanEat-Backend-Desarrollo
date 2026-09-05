@@ -7,6 +7,7 @@ import {
   updateTableChairs,
 } from "../controllers/mesaController";
 import { validateBody, validateParams } from "../middleware/validations";
+import { authenticate, requireRole } from "../middleware/authenticate";
 import {
   createTableSchema,
   tableParamsSchema,
@@ -15,14 +16,24 @@ import {
 
 const router = Router();
 
-router.post("/", validateBody(createTableSchema), createTable);
-router.get("/", getTables);
-router.get("/:id", validateParams(tableParamsSchema), getTableById);
+router.post("/", authenticate, requireRole(1), validateBody(createTableSchema), createTable);
+router.get("/", authenticate, requireRole(1, 3), getTables);
+router.get("/:id", authenticate, requireRole(1, 3), validateParams(tableParamsSchema), getTableById);
 router.put(
   "/:id",
+  authenticate,
+  requireRole(1),
   validateParams(tableParamsSchema),
   validateBody(updateTableChairsSchema),
   updateTableChairs,
 );
-router.delete("/:id", validateParams(tableParamsSchema), deleteTable);
+router.patch(
+  "/:id",
+  authenticate,
+  requireRole(1),
+  validateParams(tableParamsSchema),
+  validateBody(updateTableChairsSchema),
+  updateTableChairs,
+);
+router.delete("/:id", authenticate, requireRole(1), validateParams(tableParamsSchema), deleteTable);
 export default router;
