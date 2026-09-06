@@ -15,7 +15,7 @@ getProfile, verifyResetCode} from "../controllers/authController";
 
 import { validateBody } from "../middleware/validations";
 import { registerUserSchema } from "../db/schemas/userSchema";
-import { authenticate } from "../middleware/authenticate";
+import { authenticate,  requireRole } from "../middleware/authenticate";
 import { updateUserSchema } from "../db/schemas/userSchema";
 import {
   registerLimiter,
@@ -29,6 +29,7 @@ import {
   resendResetLimiter,
   
 } from "../middleware/rateLimiter";
+
 
 //actualizacion de baackend
 const router = Router();
@@ -44,8 +45,8 @@ router.post("/verify-reset-code", verifyResetCode);
 router.post("/reset-password", resetPasswordLimiter, resetPassword);
 router.post("/resend-reset-code", resendResetLimiter, resendResetCode);
 
-router.patch("/change-password", authenticate, changePassword);
-router.patch("/edit-profile", authenticate,validateBody(updateUserSchema),editProfile);
+router.patch("/change-password", authenticate, requireRole(1),changePassword);
+router.patch("/edit-profile", authenticate, requireRole(1),validateBody(updateUserSchema),editProfile);
 router.get("/profile",authenticate,getProfile);
 
 
