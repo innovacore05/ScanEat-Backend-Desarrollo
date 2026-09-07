@@ -82,13 +82,40 @@ if(result.length===0){
 }
 
 
-const product={
+const product = {
     ...result[0],
-    price:Number(result[0].price),
-    rating:Number(result[0].rating),
+    price: Number(result[0].price),
+    rating: Number(result[0].rating),
 };
 
-res.status(200).json(product);
+let optionGroups: Array<{
+    id: number;
+    name: string;
+    options: string[];
+}> = [];
+
+if (result[0].isCustom === 1) {
+    optionGroups = await db
+        .select({
+            id: modifierGroups.id,
+            name: modifierGroups.name,
+            options: sql<string[]>`COALESCE(
+                json_agg(${modifierOptions.name} ORDER BY ${modifierOptions.id})
+                FILTER (WHERE ${modifierOptions.id} IS NOT NULL),
+                '[]'::json
+            )`,
+        })
+        .from(modifierGroups)
+        .leftJoin(
+            modifierOptions,
+            eq(modifierOptions.groupId, modifierGroups.id),
+        )
+        .where(eq(modifierGroups.productId, result[0].productId))
+        .groupBy(modifierGroups.id, modifierGroups.name)
+        .orderBy(modifierGroups.id);
+}
+
+res.status(200).json({ ...product, optionGroups });
     }catch(error){
         console.error("Error fetching product:",error);
         res.status(500).json({message:"Error al obtener el producto"});
