@@ -168,11 +168,28 @@ export const updateUserSchema = z.object({
     .optional(),
 });
 
+export const adminUpdateUserSchema = updateUserSchema
+  .extend({
+    role_id: z.coerce.number().int().positive("El rol es requerido").optional(),
+  })
+  .refine(
+    (data) =>
+      data.first_name !== undefined ||
+      data.last_name !== undefined ||
+      data.email !== undefined ||
+      data.role_id !== undefined,
+    { message: "No hay datos para actualizar" },
+  );
+
 
 // Create Zod schemas for the users table
 export const loginUserSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
+});
+
+export const userParamsSchema = z.object({
+  id: z.coerce.number().int().positive("El identificador de usuario no es válido"),
 });
 
 export const selectUserSchema = createSelectSchema(users);
