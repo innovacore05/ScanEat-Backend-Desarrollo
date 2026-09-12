@@ -11,7 +11,7 @@ import { sendVerificationEmail } from '../services/email.service';
 import { AuthRequest } from "../middleware/authenticate";
 import { isProd } from "../../env";
 import { validatePasswordStrength } from "../utils/passwordValidation";
-import { GiConfirmed } from "react-icons/gi";
+//import { GiConfirmed } from "react-icons/gi";
 
 
 
