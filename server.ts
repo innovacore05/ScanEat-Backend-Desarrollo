@@ -8,11 +8,13 @@ import { Request,Response,NextFunction } from 'express';
 import menuRoutes from './src/routes/menuRoutes';
 import mesaRoutes from './src/routes/mesaRoutes';
 import userRoutes from './src/routes/userRoutes';
+import orderRoutes from './src/routes/orderRoutes';
 
 app.use('/api/auth', authRoutes);
 app.use("/api/menu",menuRoutes);
 app.use('/api/table', mesaRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/orders', orderRoutes);
 
 
 app.use('/api', (req, res) =>{
