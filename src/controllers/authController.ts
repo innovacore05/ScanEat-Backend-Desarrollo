@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "../db/connection";
-import { emailVerifications, loginVerifications,resetVerifications,  pendingRegistrations, roleCodes, users } from "../db/schemas/userSchema";
+import { emailVerifications, loginVerifications,resetVerifications,  pendingRegistrations, roleCodes, users, roles } from "../db/schemas/userSchema";
 import { desc } from "drizzle-orm";
 import { generateToken } from "../utils/jwt";
 import { hashPassword } from "../utils/passwords";
@@ -11,6 +11,7 @@ import { sendVerificationEmail } from '../services/email.service';
 import { AuthRequest } from "../middleware/authenticate";
 import { isProd } from "../../env";
 import { validatePasswordStrength } from "../utils/passwordValidation";
+import { GiConfirmed } from "react-icons/gi";
 
 
 
@@ -135,6 +136,43 @@ if (passwordError) {
             });
         }
 
+//Verificar que solo exista un administrador y un usuario de cocina
+const UNIQUE_ROLES=["owner","cook"];
+
+const[roleInfo]=await db
+.select({name:roles.name})
+.from (roles)
+.where(eq(roles.role_id,normalizedRoleId))
+.limit(1);
+
+if(roleInfo && UNIQUE_ROLES.includes(roleInfo.name.toLowerCase())){
+
+  const [confirmedAccount]=await db
+  .select({user_id:users.user_id})
+  .from(users)
+  .where(eq(users.role_id,normalizedRoleId))
+  .limit(1);
+   
+ 
+const [pendingAccount]=await db
+.select({pending_id:pendingRegistrations.pending_id})
+.from(pendingRegistrations)
+.where(
+  and(
+    eq(pendingRegistrations.role_id,normalizedRoleId),
+    //condicion de sql con plantilla , verfica vencimiento de registro
+    sql`${pendingRegistrations.expires_at} > NOW()`
+  )
+)
+.limit(1);
+
+if(confirmedAccount || pendingAccount){
+  return res.status(409).json({
+   message: `Ya existe una cuenta con este rol registrada`,
+        });
+}
+}
+
         // Verificar si el usuario ya existe
         const [existingUser] = await db
             .select({
@@ -236,7 +274,7 @@ if (passwordError) {
 export const verifyEmail = async (req: Request, res: Response) => {
     try {
         const { email, code } = req.body ?? {};
-
+        
         if (!email || !code) {
             return res.status(400).json({
                 message: "El correo y el código de verificación son requeridos",
@@ -278,6 +316,35 @@ export const verifyEmail = async (req: Request, res: Response) => {
                 message: "Código inválido",
             });
         }
+
+//verificar rol unico de usuario
+const UNIQUE_ROLES=["owner","cook"];
+
+const[roleInfo]=await db
+.select({name:roles.name})
+.from (roles)
+.where(eq(roles.role_id,pendingRegistration.role_id))
+.limit(1);
+
+if(roleInfo && UNIQUE_ROLES.includes(roleInfo.name.toLowerCase())){
+
+  const [confirmedAccount]=await db
+  .select({user_id:users.user_id})
+  .from(users)
+  .where(eq(users.role_id,pendingRegistration.role_id))
+  .limit(1);
+   
+if(confirmedAccount){
+  //limpia le registro pendiente 
+  await db
+  .delete(pendingRegistrations)
+  .where(eq(pendingRegistrations.pending_id,pendingRegistration.pending_id));
+  
+return res.status(409).json({
+message: `Ya existe una cuenta con ese rol registrada`,
+});
+}
+}
 
         // Crear usuario REAL
         const [user] = await db

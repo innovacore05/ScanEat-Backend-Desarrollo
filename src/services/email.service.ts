@@ -1,5 +1,5 @@
-// //Este archivo contiene la lógica para enviar correos electrónicos de verificación.
-// // Si no se configuran las variables de entorno SMTP, los códigos de verificación se imprimirán en la consola.
+//Este archivo contiene la lógica para enviar correos electrónicos de verificación.
+// Si no se configuran las variables de entorno SMTP, los códigos de verificación se imprimirán en la consola.
 
  import nodemailer from 'nodemailer';
 
@@ -15,11 +15,11 @@ function createTransporter() {
     
     connectionTimeout: 10000,
     greetingTimeout: 10000,
-     socketTimeout: 10000,
+    socketTimeout: 10000,
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASSWORD,
-   },
+    },
   });
 }
 
@@ -47,29 +47,26 @@ export async function sendVerificationEmail({ to, code }:
       </div>
     `,
   });
+}
 
+//Esto de aca NO BORRAR, es parael hosting 
 
+// const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
 
- }
-
-// Esto de aca NO BORRAR, es parael hosting 
-
-//const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
-
-//console.log('[BREVO CONFIG]', {
+// console.log('[BREVO CONFIG]', {
 //  apiKeyExists: !!process.env.BREVO_API_KEY,
 //  from: process.env.MAIL_FROM,
-//});
+// });
 
-//export async function sendVerificationEmail({ to, code }:
+// export async function sendVerificationEmail({ to, code }:
 //   { to: string; code: string }) {
 //  const apiKey = process.env.BREVO_API_KEY;
-//
+
 //  if (!apiKey) {
 //    console.log(`\n[ScanEat] codigo de verificación para ${to}: ${code}\n`);
 //    return;
 //  }
-//
+
 //  const response = await fetch(BREVO_API_URL, {
 //    method: 'POST',
 //    headers: {
@@ -96,10 +93,10 @@ export async function sendVerificationEmail({ to, code }:
 //      `,
 //    }),
 //  });
-//
+
 //  if (!response.ok) {
 //    const errorBody = await response.text();
 //    console.error('Error al enviar código de verificación (Brevo API):', response.status, errorBody);
 //    throw new Error(`Brevo API error: ${response.status}`);
 //  }
-//}
+// }
