@@ -1,7 +1,7 @@
 import { relations } from "drizzle-orm";
 import {
   integer,
-  jsonb,
+  json,
   numeric,
   pgTable,
   serial,
@@ -32,7 +32,7 @@ export const orderDetails = pgTable("order_details", {
   quantity: integer("quantity").notNull(),
   unitPrice: numeric("unit_price", { precision: 10, scale: 2 }).notNull(),
   subtotal: numeric("subtotal", { precision: 10, scale: 2 }).notNull(),
-  selectedOptions: jsonb("selected_options")
+  selectedOptions: json("selected_options")
     .$type<Record<string, string>>()
     .notNull()
     .default({}),
