@@ -14,15 +14,26 @@ export const authenticate = async (
   next: NextFunction
 ) => {
   try {
-    const authHeader = req.headers.authorization;
+    //Cambio :el jwt se veia explicito en el header que venia del front,
+    //usaba el valor que venia d elocalstorage
+    //El navegador con este pequeno cambio, adjunta la cookie
+    //sin que ningun codigo lo toque 
+     
+    // const authHeader = req.headers.authorization;
 
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({
-        message: "Token required",
-      });
-    }
+    // if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    //   return res.status(401).json({
+    //     message: "Token required",
+    //   });
+    // }
 
-    const token = authHeader.slice(7).trim();
+    // const token = authHeader.slice(7).trim();
+const token =req.cookies?.token;
+if(!token){
+  return res.status(401).json({
+    message:"Token required",
+  });
+}
 
     const payload = await verifyToken(token);
 

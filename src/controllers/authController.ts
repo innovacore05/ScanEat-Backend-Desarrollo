@@ -10,8 +10,15 @@ import { generateVerificationCode } from "../utils/generateCode";
 import { sendVerificationEmail } from '../services/email.service';
 import { AuthRequest } from "../middleware/authenticate";
 import { isProd } from "../../env";
+
+const cookieSameSite=():"none"| "lax"=>
+(isProd()? "none":"lax");
+
+
 import { validatePasswordStrength } from "../utils/passwordValidation";
 //import { GiConfirmed } from "react-icons/gi";
+
+
 
 
 
@@ -603,9 +610,18 @@ export const verifyLoginCode = async (req: Request, res: Response) => {
     .delete(loginVerifications)
     .where(eq(loginVerifications.user_id, user.user_id));
 
+//se agrega  res.cookie anrtes de retornar y se elimina la linea del token 
+res.cookie("token",token,{
+httpOnly:true,
+secure:isProd(),
+sameSite:cookieSameSite(),
+maxAge:60*60*1000,
+path:"/",
+});
+
+
     return res.status(200).json({
       message: "Inicio de sesión exitoso",
-      token,
       user: {
         userId: user.user_id,
         email: user.email,
@@ -617,6 +633,29 @@ export const verifyLoginCode = async (req: Request, res: Response) => {
     return res.status(500).json({ message: "No se pudo verificar el código de inicio de sesión" });
   } 
 };
+
+
+//controlador para cerrar sesion e invalidar la cookie en el backend 
+//
+
+export const logout=async(_req:Request,res:Response)=>{
+  try{
+    res.clearCookie("token",{
+      httpOnly:true,
+      secure:isProd(),
+      sameSite:cookieSameSite(),
+      path:"/",
+    });
+  
+  return res.status(200).json({
+    message:"Sesión cerrada correctamente",
+  });
+}catch(error){
+  console.error("Logout error:", error);
+  return res.status(500).json({message:"No se pudo cerrar la sesión" });
+  }
+};
+
 
 //controlador para reenviar el login code al correo
 export const resendLoginCode = async (req: Request, res: Response) => {

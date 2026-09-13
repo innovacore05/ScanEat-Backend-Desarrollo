@@ -11,7 +11,8 @@ import {
   resendResetCode,
   editProfile,
 changePassword,
-getProfile, verifyResetCode} from "../controllers/authController";
+getProfile, verifyResetCode,
+logout} from "../controllers/authController";
 
 import { validateBody } from "../middleware/validations";
 import { registerUserSchema } from "../db/schemas/userSchema";
@@ -38,12 +39,15 @@ router.post("/register", registerLimiter, validateBody(registerUserSchema), regi
 router.post("/verify-email", verifyEmailLimiter, verifyEmail);
 router.post("/resend-verification-code", resendVerificationLimiter, resendVerificationCode);
 router.post("/login", loginLimiter, login);
+
 router.post("/verify-login-code", verifyLoginLimiter, verifyLoginCode);
 router.post("/resend-login-code", resendLoginLimiter, resendLoginCode);
 router.post("/forgot-password", forgotPasswordLimiter, forgotPassword);
 router.post("/verify-reset-code", verifyResetCode);
 router.post("/reset-password", resetPasswordLimiter, resetPassword);
 router.post("/resend-reset-code", resendResetLimiter, resendResetCode);
+
+router.post("logout",logout);
 
 router.patch("/change-password", authenticate, requireRole(1),changePassword);
 router.patch("/edit-profile", authenticate, requireRole(1),validateBody(updateUserSchema),editProfile);
