@@ -636,7 +636,7 @@ path:"/",
 
 
 //controlador para cerrar sesion e invalidar la cookie en el backend 
-//
+
 
 export const logout=async(_req:Request,res:Response)=>{
   try{
