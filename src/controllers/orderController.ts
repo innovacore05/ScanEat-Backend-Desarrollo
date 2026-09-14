@@ -1,11 +1,7 @@
 import { Request, Response } from "express";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../db/connection";
-import {
-  modifierGroups,
-  modifierOptions,
-  products,
-} from "../db/schemas/adminMenuSchema";
+import { products } from "../db/schemas/adminMenuSchema";
 import { tables } from "../db/schemas/mesaSchema";
 import {
   createOrderSchema,
@@ -56,7 +52,6 @@ export const createOrder = async (req: Request, res: Response) => {
           quantity: item.quantity,
           unitPrice: unitPrice.toFixed(2),
           subtotal: roundCurrency(unitPrice * item.quantity),
-          selectedOptions: item.selectedOptions,
         };
       });
 
@@ -84,7 +79,6 @@ export const createOrder = async (req: Request, res: Response) => {
           quantity: detail.quantity,
           unitPrice: detail.unitPrice,
           subtotal: detail.subtotal.toFixed(2),
-          selectedOptions: detail.selectedOptions,
         })),
       );
 
@@ -122,17 +116,12 @@ export const getOrders = async (_req: Request, res: Response) => {
         product: {
           productId: products.productId,
           productName: products.productName,
-          isCustom: products.isCustom,
         },
-        modifierGroup: modifierGroups,
-        modifierOption: modifierOptions,
       })
       .from(orders)
       .innerJoin(tables, eq(orders.tableId, tables.id))
       .leftJoin(orderDetails, eq(orders.orderId, orderDetails.orderId))
       .leftJoin(products, eq(orderDetails.productId, products.productId))
-      .leftJoin(modifierGroups, eq(products.productId, modifierGroups.productId))
-      .leftJoin(modifierOptions, eq(modifierGroups.id, modifierOptions.groupId))
       .orderBy(desc(orders.date), desc(orders.orderId));
 
     const ordersById = new Map<number, {
@@ -145,16 +134,6 @@ export const getOrders = async (_req: Request, res: Response) => {
         quantity: number;
         unitPrice: string;
         subtotal: string;
-        isCustom: number | null;
-        selectedOptions: Record<string, string>;
-        optionGroups: Array<{
-          id: number;
-          name: string;
-          options: Array<{
-            id: number;
-            name: string;
-          }>;
-        }>;
       }>;
     }>();
 
@@ -166,51 +145,14 @@ export const getOrders = async (_req: Request, res: Response) => {
       }
 
       if (row.detail && row.product) {
-        let detail = current.details.find(
-          (item) => item.detailId === row.detail!.detailId,
-        );
-
-        if (!detail) {
-          detail = {
-            detailId: row.detail.detailId,
-            productId: row.product.productId,
-            productName: row.product.productName,
-            quantity: row.detail.quantity,
-            unitPrice: row.detail.unitPrice,
-            subtotal: row.detail.subtotal,
-            isCustom: row.product.isCustom,
-            selectedOptions: row.detail.selectedOptions,
-            optionGroups: [],
-          };
-          current.details.push(detail);
-        }
-
-        if (row.product.isCustom === 1 && row.modifierGroup) {
-          let optionGroup = detail.optionGroups.find(
-            (group) => group.id === row.modifierGroup!.id,
-          );
-
-          if (!optionGroup) {
-            optionGroup = {
-              id: row.modifierGroup.id,
-              name: row.modifierGroup.name,
-              options: [],
-            };
-            detail.optionGroups.push(optionGroup);
-          }
-
-          if (
-            row.modifierOption &&
-            !optionGroup.options.some(
-              (option) => option.id === row.modifierOption!.id,
-            )
-          ) {
-            optionGroup.options.push({
-              id: row.modifierOption.id,
-              name: row.modifierOption.name,
-            });
-          }
-        }
+        current.details.push({
+          detailId: row.detail.detailId,
+          productId: row.product.productId,
+          productName: row.product.productName,
+          quantity: row.detail.quantity,
+          unitPrice: row.detail.unitPrice,
+          subtotal: row.detail.subtotal,
+        });
       }
     }
 
@@ -220,3 +162,5 @@ export const getOrders = async (_req: Request, res: Response) => {
     return res.status(500).json({ message: "No se pudieron obtener los pedidos" });
   }
 };
+
+
