@@ -1,6 +1,7 @@
 import { relations } from "drizzle-orm";
 import {
   integer,
+  json,
   numeric,
   pgTable,
   serial,
@@ -31,6 +32,10 @@ export const orderDetails = pgTable("order_details", {
   quantity: integer("quantity").notNull(),
   unitPrice: numeric("unit_price", { precision: 10, scale: 2 }).notNull(),
   subtotal: numeric("subtotal", { precision: 10, scale: 2 }).notNull(),
+  selectedOptions: json("selected_options")
+    .$type<Record<string, string>>()
+    .notNull()
+    .default({}),
   orderId: integer("order_id")
     .notNull()
     .references(() => orders.orderId, { onDelete: "cascade" }),
@@ -61,6 +66,7 @@ export const orderDetailsRelations = relations(orderDetails, ({ one }) => ({
 const orderItemSchema = z.object({
   productId: z.coerce.number().int().positive("El producto no es válido"),
   quantity: z.coerce.number().int().positive("La cantidad debe ser mayor que cero"),
+  selectedOptions: z.record(z.string(), z.string()).optional().default({}),
 });
 
 export const createOrderSchema = z
