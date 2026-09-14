@@ -1,6 +1,6 @@
 export const validateImage = (
   file: Express.Multer.File | undefined,
-  maxSizeMB: number = 1
+  maxSizeMB: number = 10
 ): string | null => {
   if (!file) {
     return "Selecciona una imagen para el platillo";
