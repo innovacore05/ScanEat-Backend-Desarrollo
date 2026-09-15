@@ -1,3 +1,5 @@
+
+
 export const validateImage = (
   file: Express.Multer.File | undefined,
   maxSizeMB: number = 10
@@ -5,5 +7,15 @@ export const validateImage = (
   if (!file) {
     return "Selecciona una imagen para el platillo";
   }
+
+
+const allowedTypes=["image/jpeg", "image/png", "image/webp"];
+if (!allowedTypes.includes(file.mimetype)){
+  return "Formato no soportado.Usa JPG, PGN o WebP";
+}
+const maxBytes =maxSizeMB*1024*1024;
+if(file.size>maxBytes){
+  return `La imagen no puede superar ${maxSizeMB}MB`;
+}
   return null;
 };

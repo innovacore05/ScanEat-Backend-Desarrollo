@@ -2,39 +2,52 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 
-const uploadPath = path.join(__dirname, "../../public/uploads");
+// const uploadPath = path.join(__dirname, "../../public/uploads");
 
-if (!fs.existsSync(uploadPath)) {
-    fs.mkdirSync(uploadPath, { recursive: true });
-}
+// if (!fs.existsSync(uploadPath)) {
+//     fs.mkdirSync(uploadPath, { recursive: true });
+// }
 
-const storage = multer.diskStorage({
-    destination: (_req, _file, cb) => {
-        cb(null, uploadPath);
-    },
+// const storage = multer.diskStorage({
+//     destination: (_req, _file, cb) => {
+//         cb(null, uploadPath);
+//     },
 
-    filename: (_req, file, cb) => {
-        const extension = path.extname(file.originalname);
+//     filename: (_req, file, cb) => {
+//         const extension = path.extname(file.originalname);
 
-        const fileName = `${Date.now()}-${Math.round(
-            Math.random() * 1e9
-        )}${extension}`;
+//         const fileName = `${Date.now()}-${Math.round(
+//             Math.random() * 1e9
+//         )}${extension}`;
 
-        cb(null, fileName);
-    },
-});
+//         cb(null, fileName);
+//     },
+// });
 
 export const upload = multer({
-    storage,
+    // storage,
 
-    limits: {
-        fileSize: 5 * 1024 * 1024,
+    // limits: {
+    //     fileSize: 5 * 1024 * 1024,
+    // },
+
+    // fileFilter: (_req, file, cb) => {
+    //     if (file.mimetype.startsWith("image/")) {
+    //         cb(null, true);
+    //     } else {
+    //         cb(new Error("Solo se permiten imágenes"));
+    //     }
+    // },
+
+    storage:multer.memoryStorage(),
+    limits:{
+        fileSize:10*1024*1024,
     },
 
-    fileFilter: (_req, file, cb) => {
-        if (file.mimetype.startsWith("image/")) {
-            cb(null, true);
-        } else {
+    fileFilter:(_req,file,cb)=>{
+        if(file.mimetype.startsWith("image/")){
+            cb(null,true);
+        }else{
             cb(new Error("Solo se permiten imágenes"));
         }
     },

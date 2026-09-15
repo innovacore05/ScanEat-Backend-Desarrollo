@@ -2,6 +2,9 @@
 import { PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { randomUUID } from "crypto";
 import { r2Client } from "../config/r2Client";
+import { optimizeImage } from "../utils/optimizeImage";
+
+
 
 const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "image/webp"];
 
@@ -12,16 +15,19 @@ export async function uploadImageToStorage(
   if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
     throw new Error("Tipo de archivo no permitido. Solo JPG, PNG o WEBP.");
   }
+//agregado nuevo para la optimizcion de imagenes
 
-  const extension = file.originalname.split(".").pop();
-  const key = `${folder}/${randomUUID()}.${extension}`;
+const optimizedBuffer=await optimizeImage (file.buffer);
+const key = `${folder}/${randomUUID()}.webp`;
+
+
 
   await r2Client.send(
     new PutObjectCommand({
       Bucket: process.env.R2_BUCKET_NAME!,
       Key: key,
-      Body: file.buffer,
-      ContentType: file.mimetype,
+      Body: optimizedBuffer,
+      ContentType: "image/webp",
     })
   );
 
