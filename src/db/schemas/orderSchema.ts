@@ -69,6 +69,20 @@ const orderItemSchema = z.object({
   selectedOptions: z.record(z.string(), z.string()).optional().default({}),
 });
 
+export const orderStatuses = {
+  pending: "pending",
+  inPreparation: "preparing",
+  ready: "ready",
+  delivered: "delivered",
+} as const;
+
+export const orderStatusSchema = z.enum([
+  orderStatuses.pending,
+  orderStatuses.inPreparation,
+  orderStatuses.ready,
+  orderStatuses.delivered,
+]);
+
 export const createOrderSchema = z
   .object({
     tableId: z.uuid("El identificador de mesa no es válido"),
@@ -87,3 +101,4 @@ export const createOrderSchema = z
   });
 
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
+export type OrderStatus = z.infer<typeof orderStatusSchema>;
