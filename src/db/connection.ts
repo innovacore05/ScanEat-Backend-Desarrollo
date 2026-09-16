@@ -3,6 +3,7 @@ import { Pool } from "pg";
 import * as userSchema from "./schemas/userSchema";
 import * as mesaSchema from "./schemas/mesaSchema";
 import * as orderSchema from "./schemas/orderSchema";
+import * as reviewSchema from "./schemas/reviewSchema";
 import env from "../../env";
 
 const createPool = () => {
@@ -21,6 +22,7 @@ export const db = drizzle(createPool(), {
     ...userSchema,
     ...mesaSchema,
     ...orderSchema,
+    ...reviewSchema,
   },
 });
 
