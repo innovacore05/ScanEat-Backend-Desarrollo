@@ -15,7 +15,7 @@ const router = Router();
 router.post("/", validateBody(createOrderSchema), createOrder);
 router.get("/", authenticate, requireRole(1, 2, 3), getOrders);
 router.patch("/:id/confirm", authenticate, requireRole(3), confirmOrder);
-router.patch("/:id/ready", authenticate, requireRole(2), markOrderReady);
+router.patch("/:id/ready", authenticate, markOrderReady);
 router.patch("/:id/deliver", authenticate, requireRole(3), deliverOrder);
 
 export default router;
