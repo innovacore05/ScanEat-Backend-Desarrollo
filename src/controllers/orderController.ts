@@ -9,6 +9,7 @@ import {
 import { tables } from "../db/schemas/mesaSchema";
 import {
   createOrderSchema,
+  orderStatuses,
   orderDetails,
   orders,
 } from "../db/schemas/orderSchema";
@@ -17,6 +18,70 @@ const TAX_RATE = 0.13;
 
 const roundCurrency = (value: number) =>
   Math.round((value + Number.EPSILON) * 100) / 100;
+
+const normalizeOrderState = (value?: string) => {
+  if (!value) return undefined;
+
+  const normalized = value.trim().toLowerCase();
+
+  const aliases: Record<string, string> = {
+    pending: orderStatuses.pending,
+    pendiente: orderStatuses.pending,
+    in_preparation: orderStatuses.inPreparation,
+    "en preparación": orderStatuses.inPreparation,
+    "en preparacion": orderStatuses.inPreparation,
+    ready: orderStatuses.ready,
+    listo: orderStatuses.ready,
+    delivered: orderStatuses.delivered,
+    entregado: orderStatuses.delivered,
+  };
+
+  return aliases[normalized] ?? normalized;
+};
+
+const transitionOrderState = async (
+  req: Request,
+  res: Response,
+  { from, to, actionLabel }: { from: string; to: string; actionLabel: string },
+) => {
+  try {
+    const orderId = Number(req.params.id);
+
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      return res.status(400).json({ message: "El identificador de la orden no es válido" });
+    }
+
+    const [updatedOrder] = await db
+      .update(orders)
+      .set({ state: to })
+      .where(and(eq(orders.orderId, orderId), eq(orders.state, from)))
+      .returning();
+
+    if (updatedOrder) {
+      return res.status(200).json({
+        message: `Orden ${actionLabel} correctamente`,
+        order: updatedOrder,
+      });
+    }
+
+    const [currentOrder] = await db
+      .select({ state: orders.state })
+      .from(orders)
+      .where(eq(orders.orderId, orderId))
+      .limit(1);
+
+    if (!currentOrder) {
+      return res.status(404).json({ message: "Orden no encontrada" });
+    }
+
+    return res.status(409).json({
+      message: `La orden solo puede ser ${actionLabel} cuando está en estado ${from}`,
+    });
+  } catch (error) {
+    console.error(`Error al ${actionLabel} la orden:`, error);
+    return res.status(500).json({ message: `No se pudo ${actionLabel} la orden` });
+  }
+};
 
 //Crear orden
 export const createOrder = async (req: Request, res: Response) => {
@@ -74,6 +139,7 @@ export const createOrder = async (req: Request, res: Response) => {
           subtotal: subtotal.toFixed(2),
           tax: tax.toFixed(2),
           total: total.toFixed(2),
+          state: orderStatuses.pending,
         })
         .returning();
 
@@ -111,10 +177,44 @@ export const createOrder = async (req: Request, res: Response) => {
   }
 };
 
+export const confirmOrder = async (req: Request, res: Response) => {
+  return transitionOrderState(req, res, {
+    from: orderStatuses.pending,
+    to: orderStatuses.inPreparation,
+    actionLabel: "confirmar",
+  });
+};
+
+export const markOrderReady = async (req: Request, res: Response) => {
+  return transitionOrderState(req, res, {
+    from: orderStatuses.inPreparation,
+    to: orderStatuses.ready,
+    actionLabel: "marcar como listo",
+  });
+};
+
+export const deliverOrder = async (req: Request, res: Response) => {
+  return transitionOrderState(req, res, {
+    from: orderStatuses.ready,
+    to: orderStatuses.delivered,
+    actionLabel: "entregar",
+  });
+};
+
 //Obtener la orden
-export const getOrders = async (_req: Request, res: Response) => {
+export const getOrders = async (req: Request, res: Response) => {
   try {
-    const rows = await db
+    const rawState = req.query.state;
+    const stateValue =
+      typeof rawState === "string"
+        ? rawState
+        : Array.isArray(rawState) && typeof rawState[0] === "string"
+          ? rawState[0]
+          : undefined;
+
+    const stateParam = normalizeOrderState(stateValue);
+
+    const query = db
       .select({
         order: orders,
         table: tables,
@@ -132,8 +232,13 @@ export const getOrders = async (_req: Request, res: Response) => {
       .leftJoin(orderDetails, eq(orders.orderId, orderDetails.orderId))
       .leftJoin(products, eq(orderDetails.productId, products.productId))
       .leftJoin(modifierGroups, eq(products.productId, modifierGroups.productId))
-      .leftJoin(modifierOptions, eq(modifierGroups.id, modifierOptions.groupId))
-      .orderBy(desc(orders.date), desc(orders.orderId));
+      .leftJoin(modifierOptions, eq(modifierGroups.id, modifierOptions.groupId));
+
+    const rows = stateParam
+      ? await query
+          .where(eq(orders.state, stateParam))
+          .orderBy(desc(orders.date), desc(orders.orderId))
+      : await query.orderBy(desc(orders.date), desc(orders.orderId));
 
     const ordersById = new Map<number, {
       order: typeof rows[number]["order"];
