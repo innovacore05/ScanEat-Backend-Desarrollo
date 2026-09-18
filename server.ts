@@ -22,7 +22,7 @@ app.use('/api/reviews', reviewRoutes);
 app.use('/api', (req, res) =>{
     res.status(404).json({ message: 'Endpoint not found' });
 });
-
+//comentario de verificacion para error de token 
 //maneja errores globales, evita que se filtre informacion interna del sistema como librerias
 //rutas, archivos del server,etc
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
