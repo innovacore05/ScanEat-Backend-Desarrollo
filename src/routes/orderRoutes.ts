@@ -4,6 +4,7 @@ import {
   createOrder,
   deliverOrder,
   getOrders,
+  getOrderStatus,
   markOrderReady,
 } from "../controllers/orderController";
 import { validateBody } from "../middleware/validations";
@@ -14,6 +15,7 @@ const router = Router();
 
 router.post("/", validateBody(createOrderSchema), createOrder);
 router.get("/", authenticate, requireRole(1, 2, 3), getOrders);
+router.get("/:id/status", getOrderStatus);
 router.patch("/:id/confirm", authenticate, requireRole(3), confirmOrder);
 router.patch("/:id/ready", authenticate, markOrderReady);
 router.patch("/:id/deliver", authenticate, requireRole(3), deliverOrder);

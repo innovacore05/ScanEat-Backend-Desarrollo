@@ -325,3 +325,40 @@ export const getOrders = async (req: Request, res: Response) => {
     return res.status(500).json({ message: "No se pudieron obtener los pedidos" });
   }
 };
+
+
+//obtener el estado de la order
+export const getOrderStatus = async (req: Request, res: Response) => {
+  try {
+    const orderId = Number(req.params.id);
+
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      return res.status(400).json({
+        message: "El identificador de la orden no es válido",
+      });
+    }
+
+    const [order] = await db
+      .select({
+        orderId: orders.orderId,
+        state: orders.state,
+      })
+      .from(orders)
+      .where(eq(orders.orderId, orderId))
+      .limit(1);
+
+    if (!order) {
+      return res.status(404).json({
+        message: "Orden no encontrada",
+      });
+    }
+
+    return res.status(200).json(order);
+  } catch (error) {
+    console.error("Error obteniendo estado de la orden:", error);
+
+    return res.status(500).json({
+      message: "No se pudo obtener el estado de la orden",
+    });
+  }
+};
