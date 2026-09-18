@@ -1,5 +1,5 @@
 //Este archivo contiene la lógica para enviar correos electrónicos de verificación.
-// Si no se configuran las variables de entorno SMTP, los códigos de verificación se imprimirán en la consola.
+//Si no se configuran las variables de entorno SMTP, los códigos de verificación se imprimirán en la consola.
 
 //  import nodemailer from 'nodemailer';
 
