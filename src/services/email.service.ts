@@ -49,7 +49,7 @@
 //   });
 // }
 
-// Esto de aca NO BORRAR, es parael hosting 
+// Esto de aca NO BORRAR, es parael hosting , actualizacion
 
 const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
 
