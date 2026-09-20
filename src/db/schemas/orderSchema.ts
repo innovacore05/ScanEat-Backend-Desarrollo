@@ -9,10 +9,13 @@ import {
   timestamp,
   uuid,
   varchar,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { products } from "./adminMenuSchema";
 import { tables } from "./mesaSchema";
+import { sql } from "drizzle-orm";
+
 
 export const orders = pgTable("orders", {
   orderId: serial("order_id").primaryKey(),
@@ -25,7 +28,16 @@ export const orders = pgTable("orders", {
   tableId: uuid("table_id")
     .notNull()
     .references(() => tables.id),
-});
+},
+//nuevo:iondice unico,donde cada mesa tenga solo una orden a la vez
+(table)=>[
+  uniqueIndex("orders_one_active_per_table_idx")
+  .on(table.tableId)
+  .where(
+    sql `${table.state} IN ('pending', 'preparing', 'ready')`,
+      ),
+],
+);
 
 export const orderDetails = pgTable("order_details", {
   detailId: serial("detail_id").primaryKey(),

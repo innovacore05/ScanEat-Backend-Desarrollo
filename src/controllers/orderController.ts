@@ -12,6 +12,7 @@ import {
   orderStatuses,
   orderDetails,
   orders,
+  orderStatusSchema,
 } from "../db/schemas/orderSchema";
 
 const TAX_RATE = 0.13;
@@ -92,46 +93,163 @@ export const createOrder = async (req: Request, res: Response) => {
       const [table] = await tx
         .select({ id: tables.id })
         .from(tables)
-        .where(and(eq(tables.id, parsed.tableId), eq(tables.active, true)))
+        .where(and(
+          eq(tables.id, parsed.tableId), 
+        eq(tables.active, true),
+      ),
+    )
         .limit(1);
 
       if (!table) {
         return { type: "table-not-found" as const };
       }
-
+//get precio
       const productRows = await tx
         .select({
           productId: products.productId,
           price: products.price,
         })
         .from(products)
-        .where(inArray(products.productId, parsed.items.map((item) => item.productId)));
+        .where(inArray(products.productId,
+           parsed.items.map((item) => item.productId),
+          ),
+          );
 
-      const prices = new Map(productRows.map((product) => [product.productId, Number(product.price)]));
-      const missingProduct = parsed.items.find((item) => !prices.has(item.productId));
+      const prices = new Map
+      (productRows.map((product) => 
+        [product.productId,
+           Number(product.price),
+          ]),
+        );
 
+
+      const missingProduct = parsed.items.find((item) =>
+         !prices.has(item.productId),
+    );
       if (missingProduct) {
-        return { type: "product-not-found" as const, productId: missingProduct.productId };
-      }
-
+        return { type: "product-not-found" as const,
+           productId: missingProduct.productId };
+      };
+   
+//detalle cliente:
       const detailValues = parsed.items.map((item) => {
         const unitPrice = prices.get(item.productId)!;
+
         return {
           productId: item.productId,
           quantity: item.quantity,
           unitPrice: unitPrice.toFixed(2),
-          subtotal: roundCurrency(unitPrice * item.quantity),
+          subtotal: roundCurrency
+          (unitPrice * item.quantity),
+
           selectedOptions: item.selectedOptions,
         };
       });
 
-      const subtotal = roundCurrency(
-        detailValues.reduce((sum, detail) => sum + detail.subtotal, 0),
-      );
-      const tax = roundCurrency(subtotal * TAX_RATE);
-      const total = roundCurrency(subtotal + tax);
 
-      const [order] = await tx
+//nuevo:la mesa tiene una orden activa?
+
+const [activeOrder]=await tx
+.select()
+.from(orders)
+.where(
+  and(
+    eq(orders.tableId,parsed.tableId),
+    inArray(orders.state,
+      [
+      orderStatuses.pending,
+      orderStatuses.inPreparation,
+      orderStatuses.ready,
+    ]),
+  ),
+)
+.limit(1);
+console.log("ACTIVE ORDER:", activeOrder);
+//si la orden activa , y , si el estado de la orden 
+//activa es no pendiente, entonces va a retornar que 
+//la orden ya esta procesandose, y que laorden esta activa
+if(activeOrder){
+  if(activeOrder.state !== orderStatuses.pending){
+    return{
+      type:"order-already-processing" as const,
+      order:activeOrder,
+    };
+  }
+
+         
+        //calculos de los productos agregados actuales y los que vienen
+
+        const newItemSubtotal=roundCurrency(
+          detailValues.reduce(
+            (sum,detail)=>sum+detail.subtotal,
+            0,
+          ),
+        );
+//sumar los nuevos montos agregados
+        const currentSubtotal=Number(activeOrder.subtotal);
+        const newSubtotal=roundCurrency(
+          currentSubtotal+newItemSubtotal,
+        );
+
+//cambiar a futuro tomando en cuenta hacienda
+        const newTax=roundCurrency(
+          newSubtotal*TAX_RATE,
+        );
+//recalculo del total
+        const newTotal=roundCurrency(
+          newSubtotal+newTax,
+        );
+
+//actaulzia rorder
+const [updateOrder] = await tx
+.update(orders)
+.set({
+  subtotal:newSubtotal.toFixed(2),
+  tax:newTax.toFixed(2),
+  total:newTotal.toFixed(2),
+  observation:
+  parsed.observation || activeOrder.observation,
+})
+ .where(eq(orders.orderId, activeOrder.orderId))
+          .returning();
+
+//agregar los productos a la misma orden
+
+      await tx.insert(orderDetails).values(
+        detailValues.map((detail) => ({
+          orderId: activeOrder.orderId,
+          productId: detail.productId,
+          quantity: detail.quantity,
+          unitPrice: detail.unitPrice,
+          subtotal: detail.subtotal.toFixed(2),
+          selectedOptions: detail.selectedOptions,
+        })),
+      );
+
+      return {
+        type: "updated" as const, 
+        order:updateOrder, 
+        details: detailValues 
+      };
+    
+    }
+
+//si la orden aciva no existe, se debe activar una nueva
+const subtotal=roundCurrency(
+  detailValues.reduce(
+    (sum,detail)=>sum+detail.subtotal,
+    0,
+  ),
+);
+const tax =roundCurrency(
+  subtotal*TAX_RATE,
+);
+
+const total=roundCurrency(
+  subtotal+tax,
+);
+
+  const [order] = await tx
         .insert(orders)
         .values({
           tableId: parsed.tableId,
@@ -143,6 +261,7 @@ export const createOrder = async (req: Request, res: Response) => {
         })
         .returning();
 
+      // Guardar los productos de la nueva orden
       await tx.insert(orderDetails).values(
         detailValues.map((detail) => ({
           orderId: order.orderId,
@@ -154,11 +273,16 @@ export const createOrder = async (req: Request, res: Response) => {
         })),
       );
 
-      return { type: "created" as const, order, details: detailValues };
+      return {
+        type: "created" as const,
+        order,
+        details: detailValues,
+      };
     });
 
     if (result.type === "table-not-found") {
-      return res.status(404).json({ message: "Mesa no encontrada o inactiva" });
+      return res.status(404).json(
+        { message: "Mesa no encontrada o inactiva" });
     }
 
     if (result.type === "product-not-found") {
@@ -167,15 +291,31 @@ export const createOrder = async (req: Request, res: Response) => {
       });
     }
 
-    return res.status(201).json({
+
+if(result.type === "order-already-processing"){
+  return res.status(409).json({
+    message:    "La orden de esta mesa ya está siendo procesada",
+    orderId:result.order.orderId,
+    state:result.order.state,
+
+});
+}//creada o actualzada
+
+    return res
+    .status
+    (result.type === "created" ? 201:200,).json({
       order: result.order,
       details: result.details,
     });
   } catch (error) {
     console.error("Error creando pedido:", error);
-    return res.status(500).json({ message: "No se pudo crear el pedido" });
+
+    return res.status(500).json(
+      { message: "No se pudo crear el pedido" });
   }
 };
+
+
 
 export const confirmOrder = async (req: Request, res: Response) => {
   return transitionOrderState(req, res, {
@@ -359,6 +499,52 @@ export const getOrderStatus = async (req: Request, res: Response) => {
 
     return res.status(500).json({
       message: "No se pudo obtener el estado de la orden",
+    });
+  }
+};
+
+//nuevo
+// Obtener la orden activa de una mesa
+export const getActiveOrder = async (req: Request, res: Response) => {
+  try {
+    const tableId = req.params.tableId;
+
+if(typeof tableId !== "string"){
+  return res.status(400).json({
+    message:"El identificador de la mesa no es válido",
+  });
+}
+
+
+    const [activeOrder] = await db
+      .select()
+      .from(orders)
+      .where(
+        and(
+          eq(orders.tableId, tableId),
+          inArray(orders.state, [
+            orderStatuses.pending,
+            orderStatuses.inPreparation,
+            orderStatuses.ready,
+          ]),
+        ),
+      )
+      .limit(1);
+
+    if (!activeOrder) {
+      return res.status(404).json({
+        message: "No hay una orden activa para esta mesa",
+      });
+    }
+
+    return res.status(200).json({
+      order: activeOrder,
+    });
+  } catch (error) {
+    console.error("Error obteniendo la orden activa:", error);
+
+    return res.status(500).json({
+      message: "No se pudo obtener la orden activa",
     });
   }
 };
