@@ -208,7 +208,9 @@ const [updateOrder] = await tx
   tax:newTax.toFixed(2),
   total:newTotal.toFixed(2),
   observation:
-  parsed.observation || activeOrder.observation,
+  [activeOrder.observation,parsed.observation]
+  .filter(Boolean)
+  .join("\n"),
 })
  .where(eq(orders.orderId, activeOrder.orderId))
           .returning();
