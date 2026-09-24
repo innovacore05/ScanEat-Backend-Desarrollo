@@ -213,7 +213,7 @@ export const createProduct = async (req: Request, res: Response) => {
 const data = req.body as CreateProductInput;
 
         //validar imagen:
-         const imageError = validateImage(req.file, 1);
+         const imageError = validateImage(req.file, 10);
     if (imageError) {
       return res.status(400).json({ message: imageError });
     }
@@ -272,7 +272,7 @@ export const createCustomDish = async (req: Request, res: Response) => {
   try {
     const data = req.body as CreateCustomDishInput;
     
-   const imageError = validateImage(req.file, 1);
+   const imageError = validateImage(req.file, 10);
     if (imageError) {
       return res.status(400).json({ message: imageError });
     }
