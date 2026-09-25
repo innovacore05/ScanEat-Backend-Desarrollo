@@ -19,16 +19,22 @@ export const authenticate = async (
   next: NextFunction
 ) => {
   try {
-    const authHeader = req.headers.authorization;
+    // const authHeader = req.headers.authorization;
+const token=req.cookies?.token;
 
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({
-        message: "Token required",
-      });
-    }
+    // if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    //   return res.status(401).json({
+    //     message: "Token required",
+    //   });
+    // }
 
-    const token = authHeader.slice(7).trim();
-
+    // const token = authHeader.slice(7).trim();
+ 
+if(!token){
+  return res.status(401).json({
+    message:"Token required",
+  });
+}
     const payload = await verifyToken(token);
 
     const [user] = await db
@@ -64,14 +70,18 @@ export const optionalAuthenticate = async (
   next: NextFunction
 ) => {
   try {
-    const authHeader = req.headers.authorization;
+   // const authHeader = req.headers.authorization;
 
     // Si no hay token, continúa como usuario no autenticado
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return next();
-    }
+    // if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    //   return next();
+    // }
+    // const token = authHeader.slice(7).trim();
+    const token=req.cookies?.token;
+if(!token){
+  return next();
+}
 
-    const token = authHeader.slice(7).trim();
     const payload = await verifyToken(token);
 
     const [user] = await db
