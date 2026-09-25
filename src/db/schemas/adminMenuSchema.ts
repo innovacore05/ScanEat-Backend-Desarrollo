@@ -17,6 +17,7 @@ export const categories = pgTable("categories", {
   name: varchar("name", {
     length: 100,
   }).notNull(),
+   businessId: integer("business_id").notNull(),
 });
 
 export const products = pgTable("products", {
@@ -31,6 +32,7 @@ export const products = pgTable("products", {
     .notNull()
     .references(() => categories.categoryId),
   isCustom: integer("is_custom").default(0),
+  businessId: integer("business_id").notNull(),
 });
 
 export const productsRelations = relations(products, ({ one, many }) => ({

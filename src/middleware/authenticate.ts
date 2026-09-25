@@ -5,7 +5,12 @@ import { db } from "../db/connection";
 import { users } from "../db/schemas/userSchema";
 
 export interface AuthRequest extends Request {
-  user?: CustomJWTPayload;
+  user?: {
+    user_id: number;
+    email: string;
+    role_id: number;
+    business_id: number | null;
+  };
 }
 
 export const authenticate = async (
@@ -31,6 +36,7 @@ export const authenticate = async (
         user_id: users.user_id,
         email: users.email,
         role_id: users.role_id,
+        business_id: users.business_id,
       })
       .from(users)
       .where(eq(users.user_id, payload.user_id))
@@ -43,6 +49,7 @@ export const authenticate = async (
     }
 
     req.user = user;
+    console.log("AUTH USER:", user);
     next();
   } catch {
     return res.status(401).json({
@@ -51,6 +58,43 @@ export const authenticate = async (
   }
 };
 
+export const optionalAuthenticate = async (
+  req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  try {
+    const authHeader = req.headers.authorization;
+
+    // Si no hay token, continúa como usuario no autenticado
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return next();
+    }
+
+    const token = authHeader.slice(7).trim();
+    const payload = await verifyToken(token);
+
+    const [user] = await db
+      .select({
+        user_id: users.user_id,
+        email: users.email,
+        role_id: users.role_id,
+        business_id: users.business_id,
+      })
+      .from(users)
+      .where(eq(users.user_id, payload.user_id))
+      .limit(1);
+
+    if (user) {
+      req.user = user;
+    }
+
+    next();
+  } catch {
+    // Si el token no es válido, simplemente continúa sin usuario
+    next();
+  }
+};
 export const requireRole = (...allowedRoles: number[]) => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
     if (!req.user) {

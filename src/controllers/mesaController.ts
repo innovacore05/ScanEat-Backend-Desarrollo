@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
-import { eq } from "drizzle-orm";
+import { AuthRequest } from "../middleware/authenticate";
+import { eq, and} from "drizzle-orm";
 import { db } from "../db/connection";
 import {
   createTableSchema,
@@ -9,16 +10,24 @@ import {
 } from "../db/schemas/mesaSchema";
 import { validateBody, validateParams } from "../middleware/validations";
 
-export const createTable = async (req: Request, res: Response) => {
+export const createTable = async (req: AuthRequest, res: Response) => {
   try {
     const parsed = createTableSchema.parse(req.body);
+    const businessId = req.user?.business_id;
+
+if (!businessId) {
+  return res.status(400).json({
+    message: "El usuario no tiene un negocio asociado",
+  });
+}
 
     const [mesa] = await db
       .insert(tables)
       .values({
-        tableNumber: parsed.tableNumber,
-        chairNumber: parsed.chairNumber,
-      })
+  tableNumber: parsed.tableNumber,
+  chairNumber: parsed.chairNumber,
+  businessId,
+})
       .returning();
 
     return res.status(201).json({
@@ -43,11 +52,19 @@ export const createTable = async (req: Request, res: Response) => {
   }
 };
 
-export const getTables = async (_req: Request, res: Response) => {
+export const getTables = async (req: AuthRequest, res: Response) => {
   try {
+    const businessId = req.user?.business_id;
+
+if (!businessId) {
+  return res.status(400).json({
+    message: "El usuario no tiene un negocio asociado",
+  });
+}
     const mesaList = await db
       .select()
       .from(tables)
+      .where(eq(tables.businessId, businessId))
       .orderBy(tables.tableNumber);
 
     return res.status(200).json(mesaList);
@@ -60,14 +77,26 @@ export const getTables = async (_req: Request, res: Response) => {
   }
 };
 
-export const getTableById = async (req: Request, res: Response) => {
+export const getTableById = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = tableParamsSchema.parse(req.params);
+    const businessId = req.user?.business_id;
+
+if (!businessId) {
+  return res.status(400).json({
+    message: "El usuario no tiene un negocio asociado",
+  });
+}
 
     const [mesa] = await db
       .select()
       .from(tables)
-      .where(eq(tables.id, id))
+      .where(
+  and(
+    eq(tables.id, id),
+    eq(tables.businessId, businessId)
+  )
+)
       .limit(1);
 
     if (!mesa) {
@@ -87,15 +116,27 @@ export const getTableById = async (req: Request, res: Response) => {
 };
 
 //controller para actualizar la cantidad de sillas de una mesa
-export const updateTableChairs = async (req: Request, res: Response) => {
+export const updateTableChairs = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = tableParamsSchema.parse(req.params);
+    const businessId = req.user?.business_id;
+
+if (!businessId) {
+  return res.status(400).json({
+    message: "El usuario no tiene un negocio asociado",
+  });
+}
     const { chairNumber } = updateTableChairsSchema.parse(req.body);
 
     const [mesa] = await db
       .update(tables)
       .set({ chairNumber })
-      .where(eq(tables.id, id))
+      .where(
+  and(
+    eq(tables.id, id),
+    eq(tables.businessId, businessId)
+  )
+)
       .returning();
 
     if (!mesa) {
@@ -115,13 +156,25 @@ export const updateTableChairs = async (req: Request, res: Response) => {
 };
 
 //controller para eliminar una mesa
-export const deleteTable = async (req: Request, res: Response) => {
+export const deleteTable = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = tableParamsSchema.parse(req.params);
+    const businessId = req.user?.business_id;
+
+if (!businessId) {
+  return res.status(400).json({
+    message: "El usuario no tiene un negocio asociado",
+  });
+}
 
     const [mesa] = await db
       .delete(tables)
-      .where(eq(tables.id, id))
+      .where(
+  and(
+    eq(tables.id, id),
+    eq(tables.businessId, businessId)
+  )
+)
       .returning();
 
     if (!mesa) {

@@ -23,7 +23,7 @@ router.get("/active/:tableId", getActiveOrder);
 
 router.get("/:id/status", getOrderStatus);
 router.patch("/:id/confirm", authenticate, requireRole(3), confirmOrder);
-router.patch("/:id/ready", authenticate, markOrderReady);
+router.patch("/:id/ready", authenticate,requireRole(2), markOrderReady);
 router.patch("/:id/deliver", authenticate, requireRole(3), deliverOrder);
 
 export default router;

@@ -1,105 +1,149 @@
 import { Request, Response } from "express";
+import { AuthRequest } from "../middleware/authenticate";
 import { and, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { db } from "../db/connection";
+import { tables } from "../db/schemas/mesaSchema";
 import {
   products,
   categories,
   modifierGroups,
   modifierOptions,
-  type CreateProductInput,  
-  type CreateCustomDishInput, 
+  type CreateProductInput,
+  type CreateCustomDishInput,
 } from "../db/schemas/adminMenuSchema";
-import {  deleteImageFromStorage, uploadImageToStorage} from "../services/storage.service";
+import { deleteImageFromStorage, uploadImageToStorage } from "../services/storage.service";
 import { validateImage } from "../utils/validateImage";
 
-//obtener los productos de la base de datos
+export const getProducts = async (
+  req: AuthRequest,
+  res: Response
+) => {
+  try {
+    const { mesaId, category, search, limit, offset } = req.query;
 
-export const getProducts= async (req:Request,res:Response)=>{
+    let businessId: number | null = null;
 
-try{ 
+    if (mesaId) {
+      const [table] = await db
+        .select({
+          businessId: tables.businessId,
+        })
+        .from(tables)
+        .where(eq(tables.id, String(mesaId)))
+        .limit(1);
 
-const { category, search, limit, offset } = req.query;
-const limitNum = limit ? Number(limit) : 10;
-		const offsetNum = offset ? Number(offset) : 0;
-const result=await db
-.select({
+      if (!table) {
+        return res.status(404).json({
+          message: "La mesa no existe",
+        });
+      }
 
-    productId: products.productId,
-    productName: products.productName,
-    description: products.description,
-    price: products.price,
-    image: products.image,
-    rating: products.rating,
-    categoryId: products.categoryId,
+      businessId = table.businessId;
+    } else {
+      businessId = req.user?.business_id ?? null;
+    }
 
-})
-.from(products)
-.leftJoin(categories,eq(products.categoryId,categories.categoryId))
-.where(
-    and(
-        category ? eq (products.categoryId,Number(category)):undefined,
-        search ? or(
-								sql`unaccent(${products.productName}) ILIKE unaccent(${`%${search}%`})`,
-								sql`unaccent(${categories.name}) ILIKE unaccent(${`%${search}%`})`
-							)
-						: undefined
-    )
-    )
-    .orderBy(products.productId)
-			.limit(limitNum)
-			.offset(offsetNum);
+    console.log("MESA ID:", mesaId);
+    console.log("PRODUCTS BUSINESS ID:", businessId);
 
+    if (!businessId) {
+      return res.status(400).json({
+        message: "No se pudo determinar el negocio",
+      });
+    }
 
-    const formatted =result.map((p)=>({
-        ...p,
-        price:Number(p.price),
-        rating:Number(p.rating),
+    const limitNum = limit ? Number(limit) : 10;
+    const offsetNum = offset ? Number(offset) : 0;
+
+    const result = await db
+      .select({
+        productId: products.productId,
+        productName: products.productName,
+        description: products.description,
+        price: products.price,
+        image: products.image,
+        rating: products.rating,
+        categoryId: products.categoryId,
+      })
+      .from(products)
+      .leftJoin(
+        categories,
+        eq(products.categoryId, categories.categoryId)
+      )
+      .where(
+        and(
+          eq(products.businessId, businessId),
+
+          category
+            ? eq(products.categoryId, Number(category))
+            : undefined,
+
+          search
+            ? or(
+              sql`unaccent(${products.productName}) ILIKE unaccent(${`%${search}%`})`,
+              sql`unaccent(${categories.name}) ILIKE unaccent(${`%${search}%`})`
+            )
+            : undefined
+        )
+      )
+      .orderBy(products.productId)
+      .limit(limitNum)
+      .offset(offsetNum);
+
+    const formatted = result.map((p) => ({
+      ...p,
+      price: Number(p.price),
+      rating: Number(p.rating),
     }));
 
- res.status(200).json({
-			products: formatted,
-			hasMore: formatted.length === limitNum,
-		});
-}catch (error){
-    console.error("Error fetching products:",error);
-    res.status(500).json({message:"Error al obtener los productos"});
-}
-};
+    res.status(200).json({
+      products: formatted,
+      hasMore: formatted.length === limitNum,
+    });
+  } catch (error) {
+    console.error("Error fetching products:", error);
 
+    res.status(500).json({
+      message: "Error al obtener los productos",
+    });
+  }
+};
 
 //obtener producto por id 
-export const getProductsById=async(req:Request,res:Response)=>{
-    try{
-        const {id}=req.params;
+export const getProductsById = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = req.params;
 
-        const result=await db
-        .select()
-        .from(products)
-        .where(eq(products.productId,Number(id)));
+    const result = await db
+      .select()
+      .from(products)
+      .where(
+        eq(products.productId, Number(id))
+      );
 
-if(result.length===0){
-    return res.status(404).json({message:"Producto no encontrado"});
-}
+    if (result.length === 0) {
+      return res.status(404).json({ message: "Producto no encontrado" });
+    }
 
 
-const product = {
-    ...result[0],
-    price: Number(result[0].price),
-    rating: Number(result[0].rating),
-};
+    const product = {
+      ...result[0],
+      price: Number(result[0].price),
+      rating: Number(result[0].rating),
+    };
 
-let optionGroups: Array<{
-    id: number;
-    name: string;
-    options: string[];
-}> = [];
+    let optionGroups: Array<{
+      id: number;
+      name: string;
+      options: string[];
+    }> = [];
 
-if (result[0].isCustom === 1) {
-    optionGroups = await db
+    if (result[0].isCustom === 1) {
+      optionGroups = await db
         .select({
-            id: modifierGroups.id,
-            name: modifierGroups.name,
-            options: sql<string[]>`COALESCE(
+          id: modifierGroups.id,
+          name: modifierGroups.name,
+          options: sql<string[]>`COALESCE(
                 json_agg(${modifierOptions.name} ORDER BY ${modifierOptions.id})
                 FILTER (WHERE ${modifierOptions.id} IS NOT NULL),
                 '[]'::json
@@ -107,29 +151,49 @@ if (result[0].isCustom === 1) {
         })
         .from(modifierGroups)
         .leftJoin(
-            modifierOptions,
-            eq(modifierOptions.groupId, modifierGroups.id),
+          modifierOptions,
+          eq(modifierOptions.groupId, modifierGroups.id),
         )
         .where(eq(modifierGroups.productId, result[0].productId))
         .groupBy(modifierGroups.id, modifierGroups.name)
         .orderBy(modifierGroups.id);
-}
-
-res.status(200).json({ ...product, optionGroups });
-    }catch(error){
-        console.error("Error fetching product:",error);
-        res.status(500).json({message:"Error al obtener el producto"});
     }
+
+    res.status(200).json({ ...product, optionGroups });
+  } catch (error) {
+    console.error("Error fetching product:", error);
+    res.status(500).json({ message: "Error al obtener el producto" });
+  }
 };
 
 //obtener categorias
-export const getCategories = async (req: Request, res: Response) => {
+export const getCategories = async (
+  req: AuthRequest,
+  res: Response
+) => {
   try {
-    const result = await db.select().from(categories).orderBy(categories.name);
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
+
+    const result = await db
+      .select()
+      .from(categories)
+      .where(eq(categories.businessId, businessId))
+      .orderBy(categories.name);
+
     res.status(200).json(result);
+
   } catch (error) {
     console.error("Error fetching categories:", error);
-    res.status(500).json({ message: "Error al obtener las categorías" });
+
+    res.status(500).json({
+      message: "Error al obtener las categorías",
+    });
   }
 };
 
@@ -199,80 +263,100 @@ const normaliseOptionGroups = (value: unknown) => {
       name: String(group?.name ?? "").trim(),
       options: Array.isArray(group?.options)
         ? group.options
-            .map((option: unknown) => String(option ?? "").trim())
-            .filter((option: string) => option.length > 0)
+          .map((option: unknown) => String(option ?? "").trim())
+          .filter((option: string) => option.length > 0)
         : [],
     }))
     .filter((group) => group.name.length > 0);
 };
 
 //agregar producto simple 
-export const createProduct = async (req: Request, res: Response) => {
-    try {
-    
-const data = req.body as CreateProductInput;
+export const createProduct = async (req: AuthRequest, res: Response) => {
+  try {
 
-        //validar imagen:
-         const imageError = validateImage(req.file, 10);
+    const data = req.body as CreateProductInput;
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
+
+    //validar imagen:
+    const imageError = validateImage(req.file, 10);
     if (imageError) {
       return res.status(400).json({ message: imageError });
     }
 
-        // Verificar que la categoría exista
-        const [category] = await db
-            .select()
-            .from(categories)
-             .where(eq(categories.categoryId, data.categoryId))
-            .limit(1);
+    // Verificar que la categoría exista
+    const [category] = await db
+      .select()
+      .from(categories)
+      .where(
+        and(
+          eq(categories.categoryId, data.categoryId),
+          eq(categories.businessId, businessId)
+        )
+      )
+      .limit(1);
 
-        if (!category) {
-            return res.status(400).json({
-                message: "La categoría seleccionada no existe",
-            });
-        }
-//CAMBIO DE GUARDADO DE LOCAL A R2
-        // subir la imagen a r2 cloudflare
-         const imageUrl = await uploadImageToStorage(req.file!, "products");
+    if (!category) {
+      return res.status(400).json({
+        message: "La categoría seleccionada no existe",
+      });
+    }
+    //CAMBIO DE GUARDADO DE LOCAL A R2
+    // subir la imagen a r2 cloudflare
+    const imageUrl = await uploadImageToStorage(req.file!, "products");
 
-        // Crear producto
-        const [newProduct] = await db
-            .insert(products)
-            .values({
-                productName: data.name,
+    // Crear producto
+    const [newProduct] = await db
+      .insert(products)
+      .values({
+        productName: data.name,
         description: data.description,
         price: String(data.price),
         discount: data.discount !== undefined ? String(data.discount) : "0",
         categoryId: data.categoryId,
+        businessId: businessId,
         image: imageUrl,
         rating: "0.0",
-            })
-            .returning();
+      })
+      .returning();
 
-        return res.status(201).json({
-            message: "Producto creado correctamente",
-            product: {
-                ...newProduct,
-                price: Number(newProduct.price),
-                discount: Number(newProduct.discount),
-                rating: Number(newProduct.rating),
-            },
-        });
-    } catch (error) {
-        console.error("Error creating product:", error);
+    return res.status(201).json({
+      message: "Producto creado correctamente",
+      product: {
+        ...newProduct,
+        price: Number(newProduct.price),
+        discount: Number(newProduct.discount),
+        rating: Number(newProduct.rating),
+      },
+    });
+  } catch (error) {
+    console.error("Error creating product:", error);
 
-        return res.status(500).json({
-            message: "Error al crear el producto",
-        });
-    }
+    return res.status(500).json({
+      message: "Error al crear el producto",
+    });
+  }
 };
 
 //NUEVO /PARTE DEL CUSTOMDISH
 //agregar producto personalizado 
-export const createCustomDish = async (req: Request, res: Response) => {
+export const createCustomDish = async (req: AuthRequest, res: Response) => {
   try {
     const data = req.body as CreateCustomDishInput;
-    
-   const imageError = validateImage(req.file, 10);
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
+
+    const imageError = validateImage(req.file, 10);
     if (imageError) {
       return res.status(400).json({ message: imageError });
     }
@@ -281,7 +365,12 @@ export const createCustomDish = async (req: Request, res: Response) => {
     const [category] = await db
       .select()
       .from(categories)
-      .where(eq(categories.categoryId, data.categoryId))
+      .where(
+        and(
+          eq(categories.categoryId, data.categoryId),
+          eq(categories.businessId, businessId)
+        )
+      )
       .limit(1);
 
     if (!category) {
@@ -291,18 +380,19 @@ export const createCustomDish = async (req: Request, res: Response) => {
     }
 
     //subir imagen a r2
-      const imageUrl = await uploadImageToStorage(req.file!, "products");
+    const imageUrl = await uploadImageToStorage(req.file!, "products");
 
 
     const result = await db.transaction(async (tx) => {
       const [newProduct] = await tx
         .insert(products)
         .values({
-            productName: data.name,
+          productName: data.name,
           description: data.description,
           price: String(data.price),
           discount: data.discount !== undefined ? String(data.discount) : "0",
           categoryId: data.categoryId,
+          businessId: businessId,
           image: imageUrl,
           rating: "0.0",
           isCustom: 1,
@@ -341,10 +431,17 @@ export const createCustomDish = async (req: Request, res: Response) => {
 };
 
 
-export const updateProduct = async (req: Request, res: Response) => {
+export const updateProduct = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const productId = Number(id);
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
 
     if (!Number.isInteger(productId) || productId <= 0) {
       return res.status(400).json({ message: "ID de producto inválido" });
@@ -353,14 +450,19 @@ export const updateProduct = async (req: Request, res: Response) => {
     const [existingProduct] = await db
       .select()
       .from(products)
-      .where(eq(products.productId, productId))
+      .where(
+        and(
+          eq(products.productId, productId),
+          eq(products.businessId, businessId)
+        )
+      )
       .limit(1);
 
     if (!existingProduct) {
       return res.status(404).json({ message: "Producto no encontrado" });
     }
 
-  const productName = normaliseProductName(req.body?.name);
+    const productName = normaliseProductName(req.body?.name);
     const description = req.body?.description ?? existingProduct.description;
     const categoryId = Number(req.body?.categoryId ?? existingProduct.categoryId);
     const price = normalisePrice(req.body?.price ?? existingProduct.price);
@@ -372,7 +474,12 @@ export const updateProduct = async (req: Request, res: Response) => {
     const [category] = await db
       .select()
       .from(categories)
-      .where(eq(categories.categoryId, categoryId))
+      .where(
+        and(
+          eq(categories.categoryId, categoryId),
+          eq(categories.businessId, businessId)
+        )
+      )
       .limit(1);
 
     if (!category) {
@@ -395,7 +502,12 @@ export const updateProduct = async (req: Request, res: Response) => {
         categoryId,
         image: nextImage,
       })
-      .where(eq(products.productId, productId))
+      .where(
+        and(
+          eq(products.productId, productId),
+          eq(products.businessId, businessId)
+        )
+      )
       .returning();
 
     const responseProduct = {
@@ -418,10 +530,17 @@ export const updateProduct = async (req: Request, res: Response) => {
   }
 };
 
-export const updateCustomDish = async (req: Request, res: Response) => {
+export const updateCustomDish = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const productId = Number(id);
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
 
     if (!Number.isInteger(productId) || productId <= 0) {
       return res.status(400).json({ message: "ID de producto inválido" });
@@ -430,7 +549,12 @@ export const updateCustomDish = async (req: Request, res: Response) => {
     const [existingProduct] = await db
       .select()
       .from(products)
-      .where(eq(products.productId, productId))
+      .where(
+        and(
+          eq(products.productId, productId),
+          eq(products.businessId, businessId)
+        )
+      )
       .limit(1);
 
     if (!existingProduct) {
@@ -452,7 +576,12 @@ export const updateCustomDish = async (req: Request, res: Response) => {
     const [category] = await db
       .select()
       .from(categories)
-      .where(eq(categories.categoryId, categoryId))
+      .where(
+        and(
+          eq(categories.categoryId, categoryId),
+          eq(categories.businessId, businessId)
+        )
+      )
       .limit(1);
 
     if (!category) {
@@ -492,7 +621,12 @@ export const updateCustomDish = async (req: Request, res: Response) => {
           image: nextImage,
           isCustom: 1,
         })
-        .where(eq(products.productId, productId))
+        .where(
+          and(
+            eq(products.productId, productId),
+            eq(products.businessId, businessId)
+          )
+        )
         .returning();
 
       for (const group of optionGroups) {
@@ -532,10 +666,17 @@ export const updateCustomDish = async (req: Request, res: Response) => {
   }
 };
 
-export const deleteProduct = async (req: Request, res: Response) => {
+export const deleteProduct = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const productId = Number(id);
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
 
     if (!Number.isInteger(productId) || productId <= 0) {
       return res.status(400).json({ message: "ID de producto inválido" });
@@ -544,7 +685,12 @@ export const deleteProduct = async (req: Request, res: Response) => {
     const [existingProduct] = await db
       .select()
       .from(products)
-      .where(eq(products.productId, productId))
+      .where(
+        and(
+          eq(products.productId, productId),
+          eq(products.businessId, businessId)
+        )
+      )
       .limit(1);
 
     if (!existingProduct) {
@@ -566,7 +712,12 @@ export const deleteProduct = async (req: Request, res: Response) => {
       await db.delete(modifierGroups).where(inArray(modifierGroups.id, groupIds));
     }
 
-    await db.delete(products).where(eq(products.productId, productId));
+    await db.delete(products).where(
+      and(
+        eq(products.productId, productId),
+        eq(products.businessId, businessId)
+      )
+    );
 
     return res.status(200).json({ message: "Platillo eliminado correctamente" });
   } catch (error) {
@@ -575,10 +726,17 @@ export const deleteProduct = async (req: Request, res: Response) => {
   }
 };
 
-export const deleteCustomProduct = async (req: Request, res: Response) => {
+export const deleteCustomProduct = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = req.params;
     const productId = Number(id);
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
 
     if (!Number.isInteger(productId) || productId <= 0) {
       return res.status(400).json({ message: "ID de producto inválido" });
@@ -587,7 +745,12 @@ export const deleteCustomProduct = async (req: Request, res: Response) => {
     const [existingProduct] = await db
       .select()
       .from(products)
-      .where(eq(products.productId, productId))
+      .where(
+        and(
+          eq(products.productId, productId),
+          eq(products.businessId, businessId)
+        )
+      )
       .limit(1);
 
     if (!existingProduct) {
@@ -613,7 +776,12 @@ export const deleteCustomProduct = async (req: Request, res: Response) => {
       await db.delete(modifierGroups).where(inArray(modifierGroups.id, groupIds));
     }
 
-    await db.delete(products).where(eq(products.productId, productId));
+    await db.delete(products).where(
+      and(
+        eq(products.productId, productId),
+        eq(products.businessId, businessId)
+      )
+    );
 
     return res.status(200).json({ message: "Platillo personalizado eliminado correctamente" });
   } catch (error) {

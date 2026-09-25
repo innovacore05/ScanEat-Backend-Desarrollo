@@ -7,6 +7,7 @@ export const tables = pgTable("tables", {
   chairNumber: integer("chair_number").notNull().default(1),
   active: boolean("active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  businessId: integer("business_id").notNull(),
 });
 
 export const createTableSchema = z.object({

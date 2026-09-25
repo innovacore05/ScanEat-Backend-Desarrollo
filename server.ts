@@ -10,6 +10,7 @@ import mesaRoutes from './src/routes/mesaRoutes';
 import userRoutes from './src/routes/userRoutes';
 import orderRoutes from './src/routes/orderRoutes';
 import reviewRoutes from "./src/routes/reviewRoutes";
+import businessRoutes from "./src/routes/businessRoutes";
 
 app.use('/api/auth', authRoutes);
 app.use("/api/menu",menuRoutes);
@@ -17,6 +18,7 @@ app.use('/api/table', mesaRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/reviews', reviewRoutes);
+app.use('/api/businesses', businessRoutes);
 
 
 app.use('/api', (req, res) =>{

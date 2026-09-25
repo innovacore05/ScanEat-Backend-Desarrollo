@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { AuthRequest } from "../middleware/authenticate";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "../db/connection";
 import { users } from "../db/schemas/userSchema";
@@ -11,11 +12,20 @@ const userFields = {
   roleId: users.role_id,
 };
 
-export const getUsers = async (_req: Request, res: Response) => {
+export const getUsers = async (req: AuthRequest, res: Response) => {
   try {
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
+
     const userList = await db
       .select(userFields)
       .from(users)
+      .where(eq(users.business_id, businessId))
       .orderBy(users.user_id);
 
     return res.status(200).json({ users: userList });
@@ -28,13 +38,25 @@ export const getUsers = async (_req: Request, res: Response) => {
   }
 };
 
-export const getUserById = async (req: Request, res: Response) => {
+export const getUserById = async (req: AuthRequest, res: Response) => {
   try {
     const userId = Number(req.params.id);
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
     const [user] = await db
       .select(userFields)
       .from(users)
-      .where(eq(users.user_id, userId))
+      .where(
+        and(
+          eq(users.user_id, userId),
+          eq(users.business_id, businessId)
+        )
+      )
       .limit(1);
 
     if (!user) {
@@ -53,9 +75,16 @@ export const getUserById = async (req: Request, res: Response) => {
   }
 };
 
-export const updateUser = async (req: Request, res: Response) => {
+export const updateUser = async (req: AuthRequest, res: Response) => {
   try {
     const userId = Number(req.params.id);
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
     const { first_name, last_name, email, role_id } = req.body;
     const changes: Partial<typeof users.$inferInsert> = {};
 
@@ -82,11 +111,32 @@ export const updateUser = async (req: Request, res: Response) => {
         });
       }
     }
+    const [targetUser] = await db
+      .select({ userId: users.user_id })
+      .from(users)
+      .where(
+        and(
+          eq(users.user_id, userId),
+          eq(users.business_id, businessId)
+        )
+      )
+      .limit(1);
+
+    if (!targetUser) {
+      return res.status(404).json({
+        message: "Usuario no encontrado",
+      });
+    }
 
     const [updatedUser] = await db
       .update(users)
       .set(changes)
-      .where(eq(users.user_id, userId))
+      .where(
+        and(
+          eq(users.user_id, userId),
+          eq(users.business_id, businessId)
+        )
+      )
       .returning(userFields);
 
     if (!updatedUser) {
@@ -114,14 +164,25 @@ export const updateUser = async (req: Request, res: Response) => {
   }
 };
 
-export const deleteUser = async (req: Request, res: Response) => {
+export const deleteUser = async (req: AuthRequest, res: Response) => {
   try {
     const userId = Number(req.params.id);
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
     const [deletedUser] = await db
       .delete(users)
-      .where(eq(users.user_id, userId))
+      .where(
+        and(
+          eq(users.user_id, userId),
+          eq(users.business_id, businessId)
+        )
+      )
       .returning({ userId: users.user_id });
-
     if (!deletedUser) {
       return res.status(404).json({
         message: "Usuario no encontrado",
