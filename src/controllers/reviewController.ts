@@ -6,6 +6,7 @@ import {
     createReviewsSchema,
     reviews,
 } from "../db/schemas/reviewSchema";
+import { tables } from "../db/schemas/mesaSchema";
 import {
     orderDetails,
     orders,
@@ -62,8 +63,10 @@ export const getOrderReviewItems = async (
                 orderId: orders.orderId,
                 state: orders.state,
                 tableId: orders.tableId,
+                businessId: tables.businessId,
             })
             .from(orders)
+            .innerJoin(tables, eq(orders.tableId, tables.id))
             .where(eq(orders.orderId, orderId))
             .limit(1);
 
@@ -76,6 +79,32 @@ export const getOrderReviewItems = async (
         if (order.tableId !== tableId) {
             return res.status(403).json({
                 message: "El pedido no pertenece a esta mesa",
+            });
+        }
+
+        const [table] = await db
+            .select({
+                id: tables.id,
+                businessId: tables.businessId,
+            })
+            .from(tables)
+            .where(
+                and(
+                    eq(tables.id, tableId),
+                    eq(tables.active, true),
+                ),
+            )
+            .limit(1);
+
+        if (!table) {
+            return res.status(404).json({
+                message: "Mesa no encontrada o inactiva",
+            });
+        }
+
+        if (table.businessId !== order.businessId) {
+            return res.status(403).json({
+                message: "La mesa no pertenece al mismo negocio del pedido",
             });
         }
 
@@ -94,7 +123,10 @@ export const getOrderReviewItems = async (
             .from(orderDetails)
             .innerJoin(
                 products,
-                eq(orderDetails.productId, products.productId),
+                and(
+                    eq(orderDetails.productId, products.productId),
+                    eq(products.businessId, order.businessId),
+                ),
             )
             .leftJoin(
                 reviews,
@@ -165,8 +197,10 @@ export const createReviews = async (
                 orderId: orders.orderId,
                 state: orders.state,
                 tableId: orders.tableId,
+                businessId: tables.businessId,
             })
             .from(orders)
+            .innerJoin(tables, eq(orders.tableId, tables.id))
             .where(eq(orders.orderId, orderId))
             .limit(1);
 
@@ -182,6 +216,32 @@ export const createReviews = async (
             });
         }
 
+        const [table] = await db
+            .select({
+                id: tables.id,
+                businessId: tables.businessId,
+            })
+            .from(tables)
+            .where(
+                and(
+                    eq(tables.id, tableId),
+                    eq(tables.active, true),
+                ),
+            )
+            .limit(1);
+
+        if (!table) {
+            return res.status(404).json({
+                message: "Mesa no encontrada o inactiva",
+            });
+        }
+
+        if (table.businessId !== order.businessId) {
+            return res.status(403).json({
+                message: "La mesa no pertenece al mismo negocio del pedido",
+            });
+        }
+
         if (order.state !== orderStatuses.delivered) {
             return res.status(409).json({
                 message: "Solo puedes reseñar pedidos entregados",
@@ -189,16 +249,23 @@ export const createReviews = async (
         }
 
         const orderItems = await db
-            .select({
-                productId: orderDetails.productId,
-            })
-            .from(orderDetails)
-            .where(
-                and(
-                    eq(orderDetails.orderId, orderId),
-                    inArray(orderDetails.productId, productIds),
-                ),
-            );
+    .select({
+        productId: orderDetails.productId,
+    })
+    .from(orderDetails)
+    .innerJoin(
+        products,
+        and(
+            eq(orderDetails.productId, products.productId),
+            eq(products.businessId, order.businessId),
+        ),
+    )
+    .where(
+        and(
+            eq(orderDetails.orderId, orderId),
+            inArray(orderDetails.productId, productIds),
+        ),
+    );
 
         const purchasedProductIds = new Set(
             orderItems.map((item) => item.productId),

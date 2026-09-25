@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { AuthRequest } from "../middleware/authenticate";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db } from "../db/connection";
 import {
@@ -41,12 +42,42 @@ const normalizeOrderState = (value?: string) => {
 };
 
 const transitionOrderState = async (
-  req: Request,
+  req: AuthRequest,
   res: Response,
   { from, to, actionLabel }: { from: string; to: string; actionLabel: string },
 ) => {
   try {
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
     const orderId = Number(req.params.id);
+
+    const [order] = await db
+      .select({
+        orderId: orders.orderId,
+        state: orders.state,
+        businessId: tables.businessId,
+      })
+      .from(orders)
+      .innerJoin(tables, eq(orders.tableId, tables.id))
+      .where(eq(orders.orderId, orderId))
+      .limit(1);
+
+    if (!order) {
+      return res.status(404).json({
+        message: "Orden no encontrada",
+      });
+    }
+
+    if (order.businessId !== businessId) {
+      return res.status(403).json({
+        message: "No tienes permiso para modificar esta orden",
+      });
+    }
 
     if (!Number.isInteger(orderId) || orderId <= 0) {
       return res.status(400).json({ message: "El identificador de la orden no es válido" });
@@ -68,7 +99,13 @@ const transitionOrderState = async (
     const [currentOrder] = await db
       .select({ state: orders.state })
       .from(orders)
-      .where(eq(orders.orderId, orderId))
+      .innerJoin(tables, eq(orders.tableId, tables.id))
+      .where(
+        and(
+          eq(orders.orderId, orderId),
+          eq(tables.businessId, businessId),
+        ),
+      )
       .limit(1);
 
     if (!currentOrder) {
@@ -91,47 +128,63 @@ export const createOrder = async (req: Request, res: Response) => {
   try {
     const result = await db.transaction(async (tx) => {
       const [table] = await tx
-        .select({ id: tables.id })
+        .select({ id: tables.id, businessId: tables.businessId, })
         .from(tables)
         .where(and(
-          eq(tables.id, parsed.tableId), 
-        eq(tables.active, true),
-      ),
-    )
+          eq(tables.id, parsed.tableId),
+          eq(tables.active, true),
+        ),
+        )
         .limit(1);
 
       if (!table) {
         return { type: "table-not-found" as const };
       }
-//get precio
+      //get precio
       const productRows = await tx
         .select({
           productId: products.productId,
           price: products.price,
+          businessId: products.businessId,
         })
         .from(products)
-        .where(inArray(products.productId,
-           parsed.items.map((item) => item.productId),
+        .where(
+          inArray(
+            products.productId,
+            parsed.items.map((item) => item.productId),
           ),
-          );
+        );
 
       const prices = new Map
-      (productRows.map((product) => 
-        [product.productId,
-           Number(product.price),
+        (productRows.map((product) =>
+          [product.productId,
+          Number(product.price),
           ]),
         );
 
 
       const missingProduct = parsed.items.find((item) =>
-         !prices.has(item.productId),
-    );
+        !prices.has(item.productId),
+      );
       if (missingProduct) {
-        return { type: "product-not-found" as const,
-           productId: missingProduct.productId };
+        return {
+          type: "product-not-found" as const,
+          productId: missingProduct.productId
+        };
       };
-   
-//detalle cliente:
+
+      const wrongBusinessProduct = productRows.find(
+        (product) => product.businessId !== table.businessId
+      );
+
+      if (wrongBusinessProduct) {
+        return {
+          type: "product-not-in-business" as const,
+          productId: wrongBusinessProduct.productId,
+        };
+      }
+
+      //detalle cliente:
       const detailValues = parsed.items.map((item) => {
         const unitPrice = prices.get(item.productId)!;
 
@@ -140,118 +193,118 @@ export const createOrder = async (req: Request, res: Response) => {
           quantity: item.quantity,
           unitPrice: unitPrice.toFixed(2),
           subtotal: roundCurrency
-          (unitPrice * item.quantity),
+            (unitPrice * item.quantity),
 
           selectedOptions: item.selectedOptions,
         };
       });
 
 
-//nuevo:la mesa tiene una orden activa?
+      //nuevo:la mesa tiene una orden activa?
 
-const [activeOrder]=await tx
-.select()
-.from(orders)
-.where(
-  and(
-    eq(orders.tableId,parsed.tableId),
-    inArray(orders.state,
-      [
-      orderStatuses.pending,
-      orderStatuses.inPreparation,
-      orderStatuses.ready,
-    ]),
-  ),
-)
-.limit(1);
-console.log("ACTIVE ORDER:", activeOrder);
-//si la orden activa , y , si el estado de la orden 
-//activa es no pendiente, entonces va a retornar que 
-//la orden ya esta procesandose, y que laorden esta activa
-if(activeOrder){
-  if(activeOrder.state !== orderStatuses.pending){
-    return{
-      type:"order-already-processing" as const,
-      order:activeOrder,
-    };
-  }
+      const [activeOrder] = await tx
+        .select()
+        .from(orders)
+        .where(
+          and(
+            eq(orders.tableId, parsed.tableId),
+            inArray(orders.state,
+              [
+                orderStatuses.pending,
+                orderStatuses.inPreparation,
+                orderStatuses.ready,
+              ]),
+          ),
+        )
+        .limit(1);
+      console.log("ACTIVE ORDER:", activeOrder);
+      //si la orden activa , y , si el estado de la orden 
+      //activa es no pendiente, entonces va a retornar que 
+      //la orden ya esta procesandose, y que laorden esta activa
+      if (activeOrder) {
+        if (activeOrder.state !== orderStatuses.pending) {
+          return {
+            type: "order-already-processing" as const,
+            order: activeOrder,
+          };
+        }
 
-         
+
         //calculos de los productos agregados actuales y los que vienen
 
-        const newItemSubtotal=roundCurrency(
+        const newItemSubtotal = roundCurrency(
           detailValues.reduce(
-            (sum,detail)=>sum+detail.subtotal,
+            (sum, detail) => sum + detail.subtotal,
             0,
           ),
         );
-//sumar los nuevos montos agregados
-        const currentSubtotal=Number(activeOrder.subtotal);
-        const newSubtotal=roundCurrency(
-          currentSubtotal+newItemSubtotal,
+        //sumar los nuevos montos agregados
+        const currentSubtotal = Number(activeOrder.subtotal);
+        const newSubtotal = roundCurrency(
+          currentSubtotal + newItemSubtotal,
         );
 
-//cambiar a futuro tomando en cuenta hacienda
-        const newTax=roundCurrency(
-          newSubtotal*TAX_RATE,
+        //cambiar a futuro tomando en cuenta hacienda
+        const newTax = roundCurrency(
+          newSubtotal * TAX_RATE,
         );
-//recalculo del total
-        const newTotal=roundCurrency(
-          newSubtotal+newTax,
+        //recalculo del total
+        const newTotal = roundCurrency(
+          newSubtotal + newTax,
         );
 
-//actaulzia rorder
-const [updateOrder] = await tx
-.update(orders)
-.set({
-  subtotal:newSubtotal.toFixed(2),
-  tax:newTax.toFixed(2),
-  total:newTotal.toFixed(2),
-  observation:
-  [activeOrder.observation,parsed.observation]
-  .filter(Boolean)
-  .join("\n"),
-})
- .where(eq(orders.orderId, activeOrder.orderId))
+        //actaulzia rorder
+        const [updateOrder] = await tx
+          .update(orders)
+          .set({
+            subtotal: newSubtotal.toFixed(2),
+            tax: newTax.toFixed(2),
+            total: newTotal.toFixed(2),
+            observation:
+              [activeOrder.observation, parsed.observation]
+                .filter(Boolean)
+                .join("\n"),
+          })
+          .where(eq(orders.orderId, activeOrder.orderId))
           .returning();
 
-//agregar los productos a la misma orden
+        //agregar los productos a la misma orden
 
-      await tx.insert(orderDetails).values(
-        detailValues.map((detail) => ({
-          orderId: activeOrder.orderId,
-          productId: detail.productId,
-          quantity: detail.quantity,
-          unitPrice: detail.unitPrice,
-          subtotal: detail.subtotal.toFixed(2),
-          selectedOptions: detail.selectedOptions,
-        })),
+        await tx.insert(orderDetails).values(
+          detailValues.map((detail) => ({
+            orderId: activeOrder.orderId,
+            productId: detail.productId,
+            quantity: detail.quantity,
+            unitPrice: detail.unitPrice,
+            subtotal: detail.subtotal.toFixed(2),
+            selectedOptions: detail.selectedOptions,
+          })),
+        );
+
+        return {
+          type: "updated" as const,
+          order: updateOrder,
+          details: detailValues
+        };
+
+      }
+
+      //si la orden aciva no existe, se debe activar una nueva
+      const subtotal = roundCurrency(
+        detailValues.reduce(
+          (sum, detail) => sum + detail.subtotal,
+          0,
+        ),
+      );
+      const tax = roundCurrency(
+        subtotal * TAX_RATE,
       );
 
-      return {
-        type: "updated" as const, 
-        order:updateOrder, 
-        details: detailValues 
-      };
-    
-    }
+      const total = roundCurrency(
+        subtotal + tax,
+      );
 
-//si la orden aciva no existe, se debe activar una nueva
-const subtotal=roundCurrency(
-  detailValues.reduce(
-    (sum,detail)=>sum+detail.subtotal,
-    0,
-  ),
-);
-const tax =roundCurrency(
-  subtotal*TAX_RATE,
-);
-
-const total=roundCurrency(
-  subtotal+tax,
-);
-
-  const [order] = await tx
+      const [order] = await tx
         .insert(orders)
         .values({
           tableId: parsed.tableId,
@@ -293,22 +346,28 @@ const total=roundCurrency(
       });
     }
 
+    if (result.type === "product-not-in-business") {
+      return res.status(403).json({
+        message: `El producto no pertenece al negocio de la mesa`,
+      });
+    }
 
-if(result.type === "order-already-processing"){
-  return res.status(409).json({
-    message:    "La orden de esta mesa ya está siendo procesada",
-    orderId:result.order.orderId,
-    state:result.order.state,
 
-});
-}//creada o actualzada
+    if (result.type === "order-already-processing") {
+      return res.status(409).json({
+        message: "La orden de esta mesa ya está siendo procesada",
+        orderId: result.order.orderId,
+        state: result.order.state,
+
+      });
+    }//creada o actualzada
 
     return res
-    .status
-    (result.type === "created" ? 201:200,).json({
-      order: result.order,
-      details: result.details,
-    });
+      .status
+      (result.type === "created" ? 201 : 200,).json({
+        order: result.order,
+        details: result.details,
+      });
   } catch (error) {
     console.error("Error creando pedido:", error);
 
@@ -344,8 +403,15 @@ export const deliverOrder = async (req: Request, res: Response) => {
 };
 
 //Obtener la orden
-export const getOrders = async (req: Request, res: Response) => {
+export const getOrders = async (req: AuthRequest, res: Response) => {
   try {
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
     const rawState = req.query.state;
     const stateValue =
       typeof rawState === "string"
@@ -372,15 +438,23 @@ export const getOrders = async (req: Request, res: Response) => {
       .from(orders)
       .innerJoin(tables, eq(orders.tableId, tables.id))
       .leftJoin(orderDetails, eq(orders.orderId, orderDetails.orderId))
-      .leftJoin(products, eq(orderDetails.productId, products.productId))
+      .leftJoin(products, and(eq(orderDetails.productId, products.productId), eq(products.businessId, businessId))
+      )
       .leftJoin(modifierGroups, eq(products.productId, modifierGroups.productId))
       .leftJoin(modifierOptions, eq(modifierGroups.id, modifierOptions.groupId));
 
     const rows = stateParam
       ? await query
-          .where(eq(orders.state, stateParam))
-          .orderBy(desc(orders.date), desc(orders.orderId))
-      : await query.orderBy(desc(orders.date), desc(orders.orderId));
+        .where(
+          and(
+            eq(orders.state, stateParam),
+            eq(tables.businessId, businessId)
+          )
+        )
+        .orderBy(desc(orders.date), desc(orders.orderId))
+      : await query
+        .where(eq(tables.businessId, businessId))
+        .orderBy(desc(orders.date), desc(orders.orderId));
 
     const ordersById = new Map<number, {
       order: typeof rows[number]["order"];
@@ -481,13 +555,14 @@ export const getOrderStatus = async (req: Request, res: Response) => {
     }
 
     const [order] = await db
-      .select({
-        orderId: orders.orderId,
-        state: orders.state,
-      })
-      .from(orders)
-      .where(eq(orders.orderId, orderId))
-      .limit(1);
+  .select({
+    orderId: orders.orderId,
+    state: orders.state,
+  })
+  .from(orders)
+  .innerJoin(tables, eq(orders.tableId, tables.id))
+  .where(eq(orders.orderId, orderId))
+  .limit(1);
 
     if (!order) {
       return res.status(404).json({
@@ -511,11 +586,31 @@ export const getActiveOrder = async (req: Request, res: Response) => {
   try {
     const tableId = req.params.tableId;
 
-if(typeof tableId !== "string"){
-  return res.status(400).json({
-    message:"El identificador de la mesa no es válido",
-  });
-}
+    if (typeof tableId !== "string") {
+      return res.status(400).json({
+        message: "El identificador de la mesa no es válido",
+      });
+    }
+
+    const [table] = await db
+      .select({
+        id: tables.id,
+        businessId: tables.businessId,
+      })
+      .from(tables)
+      .where(
+        and(
+          eq(tables.id, tableId),
+          eq(tables.active, true),
+        ),
+      )
+      .limit(1);
+
+    if (!table) {
+      return res.status(404).json({
+        message: "Mesa no encontrada o inactiva",
+      });
+    }
 
 
     const [activeOrder] = await db

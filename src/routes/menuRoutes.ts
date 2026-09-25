@@ -62,16 +62,16 @@ import { upload } from "../middleware/upload";
 import { validateBody } from "../middleware/validations";
 import { parseFormDataJson } from "../middleware/parseFormDataJson";
 import { createCustomDishSchema, createProductSchema} from "../db/schemas/adminMenuSchema";
-import { authenticate, requireRole } from "../middleware/authenticate";
+import { authenticate, requireRole, optionalAuthenticate, } from "../middleware/authenticate";
 
 
 
 
 const router = Router();
 
-router.get("/products", getProducts);
-router.get("/products/:id", getProductsById);
-router.get("/categories", getCategories);
+router.get("/products",optionalAuthenticate, getProducts);
+router.get("/products/:id",getProductsById);
+router.get("/categories",authenticate, getCategories);
 
 //CAMBIO:uploadMemory 
 //platillo simple 

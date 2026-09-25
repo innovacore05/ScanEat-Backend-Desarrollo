@@ -10,6 +10,8 @@ export const roles = pgTable("roles", {
   name: text("name").notNull(),
 });
 
+
+
 // Define the pending_registrations table
 export const pendingRegistrations = pgTable("pending_registrations", {
     pending_id: serial("pending_id").primaryKey(),
@@ -33,6 +35,8 @@ export const pendingRegistrations = pgTable("pending_registrations", {
     expires_at: timestamp("expires_at").notNull(),
 
     created_at: timestamp("created_at").defaultNow(),
+
+    business_code: varchar("business_code", { length: 20 }),
 });
 
 // Define the users table
@@ -43,6 +47,7 @@ export const users = pgTable("users", {
   email: varchar("email", { length: 150 }).notNull().unique(),
   password: varchar("password", { length: 255 }).notNull(),
   role_id: integer("role_id").notNull().references(() => roles.role_id),
+  business_id: integer("business_id"),
 });
 
 
@@ -52,6 +57,23 @@ export const roleCodes = pgTable("role_codes", {
   code: varchar("code", { length: 50 }).notNull().unique(),
   is_active: boolean("is_active").notNull().default(true),
   role_id: integer("role_id").notNull().references(() => roles.role_id, { onDelete: "cascade" }),
+});
+
+// Define the businesses table
+export const businesses = pgTable("businesses", {
+   business_id: serial("business_id").primaryKey(),
+
+  name: varchar("name", { length: 150 }).notNull(),
+
+  email: varchar("email", { length: 255 }).notNull(),
+
+  number: varchar("number", { length: 30 }).notNull(),
+
+  code: varchar("code", { length: 20 }).notNull().unique(),
+
+  admin_id: integer("admin_id")
+    .unique()
+    .references(() => users.user_id),
 });
 
 // Define the email_verifications table
@@ -146,6 +168,23 @@ export const registerUserSchema = z.object({
     .trim()
     .min(1, "El código de rol es requerido")
     .transform((value) => value.toUpperCase()),
+      business_code: z.string().trim().optional(),
+});
+
+export const createBusinessSchema = z.object({
+  name: z.string()
+    .min(2, "El nombre del negocio debe tener al menos 2 caracteres"),
+
+  email: z.string()
+    .email("Formato de correo electrónico inválido"),
+
+  number: z.string()
+    .min(8, "El número de teléfono no es válido"),
+
+  code: z.string()
+    .trim()
+    .min(1, "El código del negocio es requerido")
+    .transform(value => value.toUpperCase()),
 });
 
 
