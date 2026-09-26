@@ -6,6 +6,7 @@ import {
   resetPassword,
   verifyEmail,
   login,
+  logout,
   verifyLoginCode,
   resendLoginCode,
   resendResetCode,
@@ -38,6 +39,7 @@ router.post("/register", registerLimiter, validateBody(registerUserSchema), regi
 router.post("/verify-email", verifyEmailLimiter, verifyEmail);
 router.post("/resend-verification-code", resendVerificationLimiter, resendVerificationCode);
 router.post("/login", loginLimiter, login);
+router.post("/logout", logout);
 router.post("/verify-login-code", verifyLoginLimiter, verifyLoginCode);
 router.post("/resend-login-code", resendLoginLimiter, resendLoginCode);
 router.post("/forgot-password", forgotPasswordLimiter, forgotPassword);
