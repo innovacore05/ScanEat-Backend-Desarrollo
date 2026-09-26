@@ -11,10 +11,6 @@ import { sendVerificationEmail } from '../services/email.service';
 import { AuthRequest } from "../middleware/authenticate";
 import { isProd } from "../../env";
 
-//nuevo
-const cookieSameSite=():"none"| "lax"=>
-(isProd()? "none":"lax");
-
 
 
 //nuevo
@@ -1363,25 +1359,4 @@ export const changePassword = async (req: AuthRequest, res: Response) => {
 };
 
 
-
-
-
-//controlador para cerrar sesion e invalidar la cookie en el backend 
-export const logout=async(_req:Request,res:Response)=>{
-  try{
-    res.clearCookie("token",{
-      httpOnly:true,
-      secure:isProd(),
-      sameSite:cookieSameSite(),
-      path:"/",
-    });
-  
-  return res.status(200).json({
-    message:"Sesión cerrada correctamente",
-  });
-}catch(error){
-  console.error("Logout error:", error);
-  return res.status(500).json({message:"No se pudo cerrar la sesión" });
-  }
-};
 
