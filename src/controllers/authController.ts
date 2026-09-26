@@ -16,6 +16,12 @@ const cookieSameSite=():"none"| "lax"=>
 (isProd()? "none":"lax");
 
 
+
+//nuevo
+const cookieSameSite=():"none"| "lax"=>
+(isProd()? "none":"lax");
+
+
 import { validatePasswordStrength } from "../utils/passwordValidation";
 //import { GiConfirmed } from "react-icons/gi";
 
@@ -693,6 +699,44 @@ path:"/",
     return res.status(500).json({ message: "No se pudo verificar el código de inicio de sesión" });
   }
 };
+
+
+//controlador para cerrar sesion e invalidar la cookie en el backend 
+export const logout=async(_req:Request,res:Response)=>{
+  try{
+    res.clearCookie("token",{
+      httpOnly:true,
+      secure:isProd(),
+      sameSite:cookieSameSite(),
+      path:"/",
+    });
+  
+  return res.status(200).json({
+    message:"Sesión cerrada correctamente",
+  });
+}catch(error){
+  console.error("Logout error:", error);
+  return res.status(500).json({message:"No se pudo cerrar la sesión" });
+  }
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 //controlador para reenviar el login code al correo
 export const resendLoginCode = async (req: Request, res: Response) => {
