@@ -422,6 +422,14 @@ export const verifyEmail = async (req: Request, res: Response) => {
       role_id: user.role_id,
     });
 
+res.cookie("token",token,{
+  httpOnly:true,
+  secure:isProd(),
+  sameSite:cookieSameSite(),
+  maxAge:10*60*60*1000,
+  path:"/",
+});
+
     // Crear registro de verificación ya verificado
     await db.insert(emailVerifications).values({
       user_id: user.user_id,
