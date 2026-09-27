@@ -17,6 +17,9 @@ export const categories = pgTable("categories", {
   name: varchar("name", {
     length: 100,
   }).notNull(),
+   icon: varchar("icon", {
+    length: 100,
+  }),
    businessId: integer("business_id").notNull(),
 });
 
@@ -115,6 +118,11 @@ const optionGroupSchema = z.object({
   options: z
     .array(z.string().trim().min(1, "Todas las opciones deben tener un valor"))
     .min(1, "Todos los grupos de opciones deben tener al menos una opción"),
+});
+
+export const createCategorySchema = z.object({
+  name: z.string().min(1, "El nombre es obligatorio"),
+  icon: z.string().min(1, "El ícono es obligatorio"),
 });
 
 export const createProductSchema = baseDishSchema;

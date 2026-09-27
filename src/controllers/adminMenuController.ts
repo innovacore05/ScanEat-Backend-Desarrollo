@@ -166,8 +166,68 @@ export const getProductsById = async (req: AuthRequest, res: Response) => {
   }
 };
 
-//obtener categorias
+// obtener categorias
 export const getCategories = async (
+  req: AuthRequest,
+  res: Response
+) => {
+  try {
+    // Primero revisamos si viene un mesaId.
+    // Si viene, tiene prioridad porque identifica directamente
+    // el negocio al que pertenece esa mesa.
+    const mesaId = String(req.query.mesaId ?? "").trim();
+
+    if (mesaId) {
+      const [mesa] = await db
+        .select({
+          businessId: tables.businessId,
+        })
+        .from(tables)
+        .where(eq(tables.id, mesaId))
+        .limit(1);
+
+      if (!mesa) {
+        return res.status(404).json({
+          message: "Mesa no encontrada",
+        });
+      }
+
+      const result = await db
+        .select()
+        .from(categories)
+        .where(eq(categories.businessId, mesa.businessId))
+        .orderBy(categories.name);
+
+      return res.status(200).json(result);
+    }
+
+    // Si no viene mesaId, entonces usamos el negocio
+    // del usuario autenticado.
+    if (req.user?.business_id) {
+      const result = await db
+        .select()
+        .from(categories)
+        .where(eq(categories.businessId, req.user.business_id))
+        .orderBy(categories.name);
+
+      return res.status(200).json(result);
+    }
+
+    // No hay mesaId ni usuario autenticado.
+    return res.status(400).json({
+      message: "El mesaId es obligatorio",
+    });
+  } catch (error) {
+    console.error("Error fetching categories:", error);
+
+    return res.status(500).json({
+      message: "Error al obtener las categorías",
+    });
+  }
+};
+
+//Crear categoria
+export const createCategory = async (
   req: AuthRequest,
   res: Response
 ) => {
@@ -180,19 +240,246 @@ export const getCategories = async (
       });
     }
 
-    const result = await db
+    const name = String(req.body?.name ?? "").trim();
+    const icon = String(req.body?.icon ?? "").trim();
+
+    if (!name) {
+      return res.status(400).json({
+        message: "El nombre de la categoría es obligatorio",
+      });
+    }
+
+    if (!icon) {
+      return res.status(400).json({
+        message: "El ícono de la categoría es obligatorio",
+      });
+    }
+
+    // Verificar si ya existe en este negocio
+    const [existingCategory] = await db
       .select()
       .from(categories)
-      .where(eq(categories.businessId, businessId))
-      .orderBy(categories.name);
+      .where(
+        and(
+          eq(categories.name, name),
+          eq(categories.businessId, businessId)
+        )
+      )
+      .limit(1);
 
-    res.status(200).json(result);
+    if (existingCategory) {
+      return res.status(400).json({
+        message: "Ya existe una categoría con ese nombre",
+      });
+    }
 
+    // Crear categoría
+    const [newCategory] = await db
+      .insert(categories)
+      .values({
+        name,
+        icon,
+        businessId,
+      })
+      .returning();
+
+    return res.status(201).json({
+      message: "Categoría creada correctamente",
+      category: newCategory,
+    });
   } catch (error) {
-    console.error("Error fetching categories:", error);
+    console.error("Error creating category:", error);
 
-    res.status(500).json({
-      message: "Error al obtener las categorías",
+    return res.status(500).json({
+      message: "Error al crear la categoría",
+    });
+  }
+};
+
+export const deleteCategory = async (
+  req: AuthRequest,
+  res: Response
+) => {
+  try {
+    const businessId = req.user?.business_id;
+    const categoryId = Number(req.params.id);
+
+    // Verificamos que el usuario tenga un negocio asociado
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
+
+    // Verificamos que el ID sea válido
+    if (!Number.isInteger(categoryId)) {
+      return res.status(400).json({
+        message: "ID de categoría inválido",
+      });
+    }
+
+    // Buscamos la categoría y comprobamos que pertenezca
+    // al mismo negocio del usuario autenticado
+    const [category] = await db
+      .select()
+      .from(categories)
+      .where(
+        and(
+          eq(categories.categoryId, categoryId),
+          eq(categories.businessId, businessId)
+        )
+      )
+      .limit(1);
+
+    if (!category) {
+      return res.status(404).json({
+        message: "Categoría no encontrada",
+      });
+    }
+    const [associatedProduct] = await db
+      .select({
+        productId: products.productId,
+      })
+      .from(products)
+      .where(
+        and(
+          eq(products.categoryId, categoryId),
+          eq(products.businessId, businessId)
+        )
+      )
+      .limit(1);
+
+    if (associatedProduct) {
+      return res.status(409).json({
+        message:
+          "No se puede eliminar esta categoría porque tiene productos asociados. Primero cambia esos productos a otra categoría o elimínalos.",
+      });
+    }
+
+    // Eliminamos la categoría
+    await db
+      .delete(categories)
+      .where(
+        and(
+          eq(categories.categoryId, categoryId),
+          eq(categories.businessId, businessId)
+        )
+      );
+
+    return res.status(200).json({
+      message: "Categoría eliminada correctamente",
+    });
+  } catch (error) {
+    console.error("Error deleting category:", error);
+
+    return res.status(500).json({
+      message: "Error al eliminar la categoría",
+    });
+  }
+};
+
+//Editar categoria
+export const updateCategory = async (
+  req: AuthRequest,
+  res: Response
+) => {
+  try {
+    const businessId = req.user?.business_id;
+    const categoryId = Number(req.params.id);
+
+    // Verificamos que el usuario tenga un negocio asociado
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
+
+    // Verificamos que el ID sea válido
+    if (!Number.isInteger(categoryId)) {
+      return res.status(400).json({
+        message: "ID de categoría inválido",
+      });
+    }
+
+    const name = String(req.body?.name ?? "").trim();
+    const icon = String(req.body?.icon ?? "").trim();
+
+    // Validamos los datos recibidos
+    if (!name) {
+      return res.status(400).json({
+        message: "El nombre de la categoría es obligatorio",
+      });
+    }
+
+    if (!icon) {
+      return res.status(400).json({
+        message: "El ícono de la categoría es obligatorio",
+      });
+    }
+
+    // Verificamos que la categoría exista
+    // y pertenezca al negocio del usuario
+    const [category] = await db
+      .select()
+      .from(categories)
+      .where(
+        and(
+          eq(categories.categoryId, categoryId),
+          eq(categories.businessId, businessId)
+        )
+      )
+      .limit(1);
+
+    if (!category) {
+      return res.status(404).json({
+        message: "Categoría no encontrada",
+      });
+    }
+
+    // Verificamos que no exista otra categoría
+    // con el mismo nombre dentro del mismo negocio
+    const [existingCategory] = await db
+      .select()
+      .from(categories)
+      .where(
+        and(
+          eq(categories.name, name),
+          eq(categories.businessId, businessId),
+          sql`${categories.categoryId} <> ${categoryId}`
+        )
+      )
+      .limit(1);
+
+    if (existingCategory) {
+      return res.status(400).json({
+        message: "Ya existe otra categoría con ese nombre",
+      });
+    }
+
+    // Actualizamos la categoría
+    const [updatedCategory] = await db
+      .update(categories)
+      .set({
+        name,
+        icon,
+      })
+      .where(
+        and(
+          eq(categories.categoryId, categoryId),
+          eq(categories.businessId, businessId)
+        )
+      )
+      .returning();
+
+    return res.status(200).json({
+      message: "Categoría actualizada correctamente",
+      category: updatedCategory,
+    });
+  } catch (error) {
+    console.error("Error updating category:", error);
+
+    return res.status(500).json({
+      message: "Error al actualizar la categoría",
     });
   }
 };
