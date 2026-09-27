@@ -13,6 +13,7 @@ import {
     orderStatuses,
 } from "../db/schemas/orderSchema";
 import { products } from "../db/schemas/adminMenuSchema";
+import { AuthRequest } from "../middleware/authenticate";
 
 const getOrderId = (value: unknown) => {
     if (typeof value !== "string") {
@@ -305,6 +306,7 @@ export const createReviews = async (
                 productId: review.productId,
                 tableId: order.tableId,
                 rating: review.rating,
+                name: review.name || null,
                 comment: review.comment || null,
             })),
         );
@@ -356,7 +358,9 @@ export const getProductReviews = async (
 
         const productReviews = await db
             .select({
+                reviewId: reviews.reviewId,
                 rating: reviews.rating,
+                name: reviews.name,
                 comment: reviews.comment,
                 createdAt: reviews.createdAt,
             })
@@ -384,6 +388,55 @@ export const getProductReviews = async (
 
         return res.status(500).json({
             message: "No se pudieron obtener las reseñas del producto",
+        });
+    }
+};
+
+export const deleteReview = async (req: AuthRequest,res: Response,) => {
+    try {
+        const reviewId = Number(req.params.reviewId);
+        const businessId = req.user?.business_id;
+
+        if (!businessId) {
+            return res.status(400).json({
+                message: "El usuario no tiene un negocio asociado",
+            });
+        }
+
+        if (!Number.isInteger(reviewId) || reviewId <= 0) {
+            return res.status(400).json({
+                message: "El ID de la reseña no es válida",
+            });
+        }
+
+        const [existingReview] = await db
+            .select({ reviewId: reviews.reviewId })
+            .from(reviews)
+            .innerJoin(products, eq(reviews.productId, products.productId))
+            .where(
+                and(
+                    eq(reviews.reviewId, reviewId),
+                    eq(products.businessId, businessId),
+                ),
+            )
+            .limit(1);
+
+        if (!existingReview) {
+            return res.status(404).json({
+                message: "Reseña no encontrada",
+            });
+        }
+
+        await db.delete(reviews).where(eq(reviews.reviewId, reviewId));
+
+        return res.status(200).json({
+            message: "Reseña eliminada correctamente",
+        });
+    } catch (error) {
+        console.error("Error eliminando reseña:", error);
+
+        return res.status(500).json({
+            message: "No se pudo eliminar la reseña",
         });
     }
 };
