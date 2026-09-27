@@ -69,3 +69,53 @@ export const createBusiness = async (req: AuthRequest, res: Response) => {
         });
     }
 };
+
+export const updateBusiness = async (req: AuthRequest, res: Response) => {
+    try {
+        const { name, email, number, code } = req.body;
+
+        const adminId = req.user?.user_id;
+
+        if (!adminId) {
+            return res.status(401).json({
+                message: "Usuario no autenticado",
+            });
+        }
+
+        const [business] = await db
+            .select({
+                businessId: businesses.business_id,
+            })
+            .from(businesses)
+            .where(eq(businesses.admin_id, adminId))
+            .limit(1);
+
+        if (!business) {
+            return res.status(404).json({
+                message: "No se encontró el negocio.",
+            });
+        }
+
+        const [updatedBusiness] = await db
+            .update(businesses)
+            .set({
+                name,
+                email,
+                number,
+                code,
+            })
+            .where(eq(businesses.business_id, business.businessId))
+            .returning();
+
+        return res.status(200).json({
+            message: "Negocio actualizado correctamente",
+            business: updatedBusiness,
+        });
+    } catch (error) {
+        console.error("Error al actualizar negocio:", error);
+
+        return res.status(500).json({
+            message: "Error al actualizar el negocio",
+        });
+    }
+};

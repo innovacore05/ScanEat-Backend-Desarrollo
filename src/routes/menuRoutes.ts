@@ -53,6 +53,9 @@ import {
   getProductsById,
   createCustomDish,
   getCategories,
+  createCategory,
+  deleteCategory,
+  updateCategory,
   updateProduct,
   updateCustomDish,
   deleteProduct,
@@ -61,7 +64,7 @@ import {
 import { upload } from "../middleware/upload";
 import { validateBody } from "../middleware/validations";
 import { parseFormDataJson } from "../middleware/parseFormDataJson";
-import { createCustomDishSchema, createProductSchema} from "../db/schemas/adminMenuSchema";
+import { createCustomDishSchema, createProductSchema, createCategorySchema,} from "../db/schemas/adminMenuSchema";
 import { authenticate, requireRole, optionalAuthenticate, } from "../middleware/authenticate";
 
 
@@ -71,7 +74,10 @@ const router = Router();
 
 router.get("/products",optionalAuthenticate, getProducts);
 router.get("/products/:id",getProductsById);
-router.get("/categories",authenticate, getCategories);
+router.get("/categories", optionalAuthenticate, getCategories);
+router.post("/categories", authenticate, requireRole(1), validateBody(createCategorySchema), createCategory);
+router.delete("/categories/:id",authenticate,requireRole(1),deleteCategory);
+router.put("/categories/:id",authenticate,requireRole(1),updateCategory);
 
 //CAMBIO:uploadMemory 
 //platillo simple 
