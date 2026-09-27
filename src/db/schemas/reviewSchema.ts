@@ -33,6 +33,8 @@ export const reviews = pgTable(
 
         rating: integer("rating").notNull(),
 
+        name: text("name"),
+
         comment: text("comment"),
 
         createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -60,9 +62,15 @@ export const reviewsRelations = relations(reviews, ({ one }) => ({
 }));
 
 export const createReviewSchema = z.object({
-  productId: z.coerce.number().int().positive(),
-  rating: z.coerce.number().int().min(1).max(5),
-  comment: z
+    productId: z.coerce.number().int().positive(),
+    rating: z.coerce.number().int().min(1).max(5),
+    name: z
+        .string()
+        .trim()
+        .max(1000)
+        .optional()
+        .nullable(),
+    comment: z
     .string()
     .trim()
     .max(1000)
@@ -71,6 +79,6 @@ export const createReviewSchema = z.object({
 });
 
 export const createReviewsSchema = z.object({
-  tableId: z.uuid(),
-  reviews: z.array(createReviewSchema).min(1),
+    tableId: z.uuid(),
+    reviews: z.array(createReviewSchema).min(1),
 });
