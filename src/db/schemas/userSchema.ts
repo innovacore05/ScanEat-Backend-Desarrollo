@@ -187,6 +187,22 @@ export const createBusinessSchema = z.object({
     .transform(value => value.toUpperCase()),
 });
 
+export const updateBusinessSchema = z.object({
+    name: z.string()
+        .min(2, "El nombre del negocio debe tener al menos 2 caracteres"),
+
+    email: z.string()
+        .email("Formato de correo electrónico inválido"),
+
+    number: z.string()
+        .min(8, "El número de teléfono no es válido"),
+
+    code: z.string()
+        .trim()
+        .min(1, "El código del negocio es requerido")
+        .transform((value) => value.toUpperCase()),
+});
+
 
 //Zod schema para editar los campos de informacion logeado 
 
