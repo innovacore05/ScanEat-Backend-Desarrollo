@@ -8,7 +8,7 @@ import {
     uuid,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
-import { orders} from "./orderSchema";
+import { orders,orderDetails} from "./orderSchema";
 import { products } from "./adminMenuSchema";
 import { tables } from "./mesaSchema";
 import { z } from "zod";
@@ -23,13 +23,25 @@ export const reviews = pgTable(
             .notNull()
             .references(() => orders.orderId, { onDelete: "restrict" }),
 
+
+            //nuevo
+            orderDetailId: integer("order_detail_id")
+            .notNull()
+            .references(() => orderDetails.detailId, {
+                onDelete: "restrict",
+            }),
+
+            
+
         productId: integer("product_id")
             .notNull()
-            .references(() => products.productId, { onDelete: "restrict" }),
+            .references(() => products.productId, 
+            { onDelete: "restrict" }),
 
         tableId: uuid("table_id")
             .notNull()
-            .references(() => tables.id, { onDelete: "restrict" }),
+            .references(() => tables.id, { onDelete: 
+                "restrict" }),
 
         rating: integer("rating").notNull(),
 
@@ -40,7 +52,7 @@ export const reviews = pgTable(
         createdAt: timestamp("created_at").notNull().defaultNow(),
     },
     (table) => ({
-        uniqueReview: unique().on(table.orderId, table.productId),
+        uniqueReview: unique().on(table.orderDetailId),
     }),
 );
 
@@ -49,6 +61,11 @@ export const reviewsRelations = relations(reviews, ({ one }) => ({
         fields: [reviews.orderId],
         references: [orders.orderId],
     }),
+    
+      orderDetail: one(orderDetails, {
+    fields: [reviews.orderDetailId],
+    references: [orderDetails.detailId],
+  }),
 
     product: one(products, {
         fields: [reviews.productId],
@@ -62,7 +79,7 @@ export const reviewsRelations = relations(reviews, ({ one }) => ({
 }));
 
 export const createReviewSchema = z.object({
-    productId: z.coerce.number().int().positive(),
+    detailId: z.coerce.number().int().positive(),
     rating: z.coerce.number().int().min(1).max(5),
     name: z
         .string()
@@ -79,6 +96,7 @@ export const createReviewSchema = z.object({
 });
 
 export const createReviewsSchema = z.object({
+    clientId: z.uuid(),
     tableId: z.uuid(),
     reviews: z.array(createReviewSchema).min(1),
 });

@@ -15,7 +15,7 @@ import { authenticate, requireRole } from "../middleware/authenticate";
 const router = Router();
 
 router.post("/", validateBody(createOrderSchema), createOrder);
-router.get("/", authenticate, requireRole(1, 2, 3), getOrders);
+router.get("/", authenticate, requireRole(1, 2, 3,4), getOrders);
 
 //nuevo
 router.get("/active/:tableId", getActiveOrder);
