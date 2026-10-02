@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { AuthRequest } from "../middleware/authenticate";
-import { eq, and} from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
+import { orders, orderStatuses } from "../db/schemas/orderSchema";
 import { db } from "../db/connection";
 import {
   createTableSchema,
@@ -38,16 +39,16 @@ if (!businessId) {
       createdAt: mesa.createdAt,
     });
   } catch (error: any) {
-    if (error?.code === "23505") {
-      return res.status(409).json({
-        message: "Ya existe una mesa con ese número",
-      });
+    if (error?.cause?.code === "23505") {
+        return res.status(409).json({
+            message: "Ya existe una mesa con ese número",
+        });
     }
 
     console.error("Error creando mesa:", error);
 
     return res.status(500).json({
-      message: "No se pudo crear la mesa",
+        message: "No se pudo crear la mesa",
     });
   }
 };
@@ -64,7 +65,7 @@ if (!businessId) {
     const mesaList = await db
       .select()
       .from(tables)
-      .where(eq(tables.businessId, businessId))
+      .where(and(eq(tables.businessId, businessId), eq(tables.active, true)))
       .orderBy(tables.tableNumber);
 
     return res.status(200).json(mesaList);
@@ -161,20 +162,46 @@ export const deleteTable = async (req: AuthRequest, res: Response) => {
     const { id } = tableParamsSchema.parse(req.params);
     const businessId = req.user?.business_id;
 
-if (!businessId) {
-  return res.status(400).json({
-    message: "El usuario no tiene un negocio asociado",
-  });
-}
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
 
-    const [mesa] = await db
-      .delete(tables)
+    // la mesa no se puede eliminar si tiene una orden sin cobrar
+    const [activeOrder] = await db
+      .select({ orderId: orders.orderId })
+      .from(orders)
       .where(
-  and(
-    eq(tables.id, id),
-    eq(tables.businessId, businessId)
-  )
-)
+        and(
+          eq(orders.tableId, id),
+          inArray(orders.state, [
+            orderStatuses.pending,
+            orderStatuses.inPreparation,
+            orderStatuses.ready,
+            orderStatuses.delivered,
+          ]),
+        ),
+      )
+      .limit(1);
+
+    if (activeOrder) {
+      return res.status(409).json({
+        message: "La mesa tiene una orden activa y no se puede eliminar",
+      });
+    }
+
+    // se desactiva en vez de borrar para conservar órdenes, recibos y reseñas
+    const [mesa] = await db
+      .update(tables)
+      .set({ active: false })
+      .where(
+        and(
+          eq(tables.id, id),
+          eq(tables.businessId, businessId),
+          eq(tables.active, true),
+        ),
+      )
       .returning();
 
     if (!mesa) {
@@ -193,4 +220,4 @@ if (!businessId) {
       message: "No se pudo eliminar la mesa",
     });
   }
-}
+};
