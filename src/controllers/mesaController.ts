@@ -116,6 +116,41 @@ if (!businessId) {
   }
 };
 
+export const getPublicTableNumber = async (req: Request, res: Response) => {
+  const parsedParams = tableParamsSchema.safeParse({ id: req.params.tableId });
+
+  if (!parsedParams.success) {
+    return res.status(400).json({
+      message: "El identificador de mesa no es válido",
+    });
+  }
+
+  try {
+    const [mesa] = await db
+      .select({ tableNumber: tables.tableNumber })
+      .from(tables)
+      .where(
+        and(
+          eq(tables.id, parsedParams.data.id),
+          eq(tables.active, true),
+        ),
+      )
+      .limit(1);
+
+    if (!mesa) {
+      return res.status(404).json({ message: "Mesa no encontrada" });
+    }
+
+    return res.status(200).json({ tableNumber: mesa.tableNumber });
+  } catch (error) {
+    console.error("Error obteniendo el número de mesa público:", error);
+
+    return res.status(500).json({
+      message: "No se pudo obtener el número de mesa",
+    });
+  }
+};
+
 //controller para actualizar la cantidad de sillas de una mesa
 export const updateTableChairs = async (req: AuthRequest, res: Response) => {
   try {
