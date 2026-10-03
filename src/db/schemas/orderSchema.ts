@@ -25,6 +25,7 @@ export const orders = pgTable("orders", {
   tax: numeric("tax", { precision: 10, scale: 2 }).notNull().default("0.00"),
   total: numeric("total", { precision: 10, scale: 2 }).notNull().default("0.00"),
   observation: text("observation"),
+  paidAt: timestamp("paid_at"),
   tableId: uuid("table_id")
     .notNull()
     .references(() => tables.id),
@@ -34,15 +35,23 @@ export const orders = pgTable("orders", {
   uniqueIndex("orders_one_active_per_table_idx")
   .on(table.tableId)
   .where(
-    sql `${table.state} IN ('pending', 'preparing', 'ready')`,
-      ),
+    sql`${table.state} IN ('pending', 'preparing', 'ready', 'delivered')`,
+  ),
 ],
 );
 
 export const orderDetails = pgTable("order_details", {
   detailId: serial("detail_id").primaryKey(),
   quantity: integer("quantity").notNull(),
+  clientId: uuid("client_id"),
   unitPrice: numeric("unit_price", { precision: 10, scale: 2 }).notNull(),
+  //nuevo
+  discountAmount: numeric("discount_amount", {
+    precision: 10,
+    scale: 2,
+  }).notNull().default("0.00"),
+
+
   subtotal: numeric("subtotal", { precision: 10, scale: 2 }).notNull(),
   selectedOptions: json("selected_options")
     .$type<Record<string, string>>()
@@ -86,6 +95,8 @@ export const orderStatuses = {
   inPreparation: "preparing",
   ready: "ready",
   delivered: "delivered",
+  paid: "paid",
+  cancelled: "cancelled",
 } as const;
 
 export const orderStatusSchema = z.enum([
@@ -93,11 +104,14 @@ export const orderStatusSchema = z.enum([
   orderStatuses.inPreparation,
   orderStatuses.ready,
   orderStatuses.delivered,
+   orderStatuses.paid,
+  orderStatuses.cancelled,
 ]);
 
 export const createOrderSchema = z
   .object({
     tableId: z.uuid("El identificador de mesa no es válido"),
+    clientId: z.uuid().optional(),
     observation: z.string().trim().max(1000, "La observación es demasiado larga").optional(),
     items: z.array(orderItemSchema).min(1, "El pedido debe incluir al menos un producto"),
   })

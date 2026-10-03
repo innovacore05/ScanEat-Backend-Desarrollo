@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { AuthRequest } from "../middleware/authenticate";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray,isNull } from "drizzle-orm";
 import { db } from "../db/connection";
 import {
   modifierGroups,
@@ -146,6 +146,7 @@ export const createOrder = async (req: Request, res: Response) => {
           productId: products.productId,
           price: products.price,
           businessId: products.businessId,
+          discount:products.discount,
         })
         .from(products)
         .where(
@@ -155,16 +156,25 @@ export const createOrder = async (req: Request, res: Response) => {
           ),
         );
 
-      const prices = new Map
-        (productRows.map((product) =>
-          [product.productId,
-          Number(product.price),
-          ]),
-        );
-
+      // const prices = new Map
+      //   (productRows.map((product) =>
+      //     [product.productId,
+      //     Number(product.price),
+      //     ]),
+      //   );
+//nuevo:precio+decuento:
+const productData=new Map(
+  productRows.map((product)=>[
+    product.productId,
+    {
+      price:Number(product.price),
+      discount:Number(product.discount ?? 0),
+    },
+  ]),
+);
 
       const missingProduct = parsed.items.find((item) =>
-        !prices.has(item.productId),
+        !productData.has(item.productId),
       );
       if (missingProduct) {
         return {
@@ -186,15 +196,30 @@ export const createOrder = async (req: Request, res: Response) => {
 
       //detalle cliente:
       const detailValues = parsed.items.map((item) => {
-        const unitPrice = prices.get(item.productId)!;
+        const product = productData.get(item.productId)!;
+        //nuevo
+        const unitPrice = product.price;
+  const discountPercent = product.discount;
+
+  const gross = roundCurrency(
+    unitPrice * item.quantity
+  );
+
+  const discountAmount = roundCurrency(
+    gross * (discountPercent / 100)
+  );
+
+  const subTotal = roundCurrency(
+    gross - discountAmount
+  );
+        
 
         return {
           productId: item.productId,
           quantity: item.quantity,
           unitPrice: unitPrice.toFixed(2),
-          subtotal: roundCurrency
-            (unitPrice * item.quantity),
-
+          discountAmount:discountAmount.toFixed(2),      
+          subtotal: subTotal,
           selectedOptions: item.selectedOptions,
         };
       });
@@ -213,10 +238,12 @@ export const createOrder = async (req: Request, res: Response) => {
                 orderStatuses.pending,
                 orderStatuses.inPreparation,
                 orderStatuses.ready,
+                 orderStatuses.delivered,
               ]),
           ),
         )
         .limit(1);
+
       console.log("ACTIVE ORDER:", activeOrder);
       //si la orden activa , y , si el estado de la orden 
       //activa es no pendiente, entonces va a retornar que 
@@ -272,12 +299,15 @@ export const createOrder = async (req: Request, res: Response) => {
 
         await tx.insert(orderDetails).values(
           detailValues.map((detail) => ({
+           
             orderId: activeOrder.orderId,
             productId: detail.productId,
             quantity: detail.quantity,
             unitPrice: detail.unitPrice,
+            discountAmount:detail.discountAmount,
             subtotal: detail.subtotal.toFixed(2),
             selectedOptions: detail.selectedOptions,
+             clientId: parsed.clientId ?? null,
           })),
         );
 
@@ -323,8 +353,10 @@ export const createOrder = async (req: Request, res: Response) => {
           productId: detail.productId,
           quantity: detail.quantity,
           unitPrice: detail.unitPrice,
+          discountAmount: detail.discountAmount,
           subtotal: detail.subtotal.toFixed(2),
           selectedOptions: detail.selectedOptions,
+          clientId: parsed.clientId ?? null,
         })),
       );
 
@@ -422,6 +454,8 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
 
     const stateParam = normalizeOrderState(stateValue);
 
+    const pendingPayment=req.query.pendingPayment==="true";
+
     const query = db
       .select({
         order: orders,
@@ -443,18 +477,30 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
       .leftJoin(modifierGroups, eq(products.productId, modifierGroups.productId))
       .leftJoin(modifierOptions, eq(modifierGroups.id, modifierOptions.groupId));
 
-    const rows = stateParam
-      ? await query
-        .where(
-          and(
-            eq(orders.state, stateParam),
-            eq(tables.businessId, businessId)
-          )
-        )
-        .orderBy(desc(orders.date), desc(orders.orderId))
-      : await query
-        .where(eq(tables.businessId, businessId))
-        .orderBy(desc(orders.date), desc(orders.orderId));
+const whereConditions=[
+  eq(tables.businessId,businessId),
+  ...(stateParam ? [eq(orders.state,stateParam)]:[]),
+  ...(pendingPayment ? [isNull(orders.paidAt)]:[]),
+];
+
+
+    // const rows = stateParam
+    //   ? await query
+    //     .where(
+    //       and(
+    //         eq(orders.state, stateParam),
+    //         eq(tables.businessId, businessId)
+    //       )
+    //     )
+    //     .orderBy(desc(orders.date), desc(orders.orderId))
+    //   : await query
+    //     .where(eq(tables.businessId, businessId))
+    //     .orderBy(desc(orders.date), desc(orders.orderId));
+
+    //nuevo
+    const rows =await query
+    .where(and(...whereConditions))
+    .orderBy(desc(orders.date),desc(orders.orderId));
 
     const ordersById = new Map<number, {
       order: typeof rows[number]["order"];
@@ -465,6 +511,7 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
         productName: string;
         quantity: number;
         unitPrice: string;
+        discountAmount: string;
         subtotal: string;
         isCustom: number | null;
         selectedOptions: Record<string, string>;
@@ -498,6 +545,7 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
             productName: row.product.productName,
             quantity: row.detail.quantity,
             unitPrice: row.detail.unitPrice,
+            discountAmount: row.detail.discountAmount,
             subtotal: row.detail.subtotal,
             isCustom: row.product.isCustom,
             selectedOptions: row.detail.selectedOptions,
@@ -623,6 +671,7 @@ export const getActiveOrder = async (req: Request, res: Response) => {
             orderStatuses.pending,
             orderStatuses.inPreparation,
             orderStatuses.ready,
+            orderStatuses.delivered,
           ]),
         ),
       )
