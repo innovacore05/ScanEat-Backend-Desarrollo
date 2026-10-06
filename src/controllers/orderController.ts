@@ -1,6 +1,17 @@
 import { Request, Response } from "express";
 import { AuthRequest } from "../middleware/authenticate";
-import { and, desc, eq, inArray,isNull } from "drizzle-orm";
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  sql,
+  sum,
+} from "drizzle-orm";
 import { db } from "../db/connection";
 import {
   modifierGroups,
@@ -146,7 +157,7 @@ export const createOrder = async (req: Request, res: Response) => {
           productId: products.productId,
           price: products.price,
           businessId: products.businessId,
-          discount:products.discount,
+          discount: products.discount,
         })
         .from(products)
         .where(
@@ -162,16 +173,16 @@ export const createOrder = async (req: Request, res: Response) => {
       //     Number(product.price),
       //     ]),
       //   );
-//nuevo:precio+decuento:
-const productData=new Map(
-  productRows.map((product)=>[
-    product.productId,
-    {
-      price:Number(product.price),
-      discount:Number(product.discount ?? 0),
-    },
-  ]),
-);
+      //nuevo:precio+decuento:
+      const productData = new Map(
+        productRows.map((product) => [
+          product.productId,
+          {
+            price: Number(product.price),
+            discount: Number(product.discount ?? 0),
+          },
+        ]),
+      );
 
       const missingProduct = parsed.items.find((item) =>
         !productData.has(item.productId),
@@ -199,26 +210,26 @@ const productData=new Map(
         const product = productData.get(item.productId)!;
         //nuevo
         const unitPrice = product.price;
-  const discountPercent = product.discount;
+        const discountPercent = product.discount;
 
-  const gross = roundCurrency(
-    unitPrice * item.quantity
-  );
+        const gross = roundCurrency(
+          unitPrice * item.quantity
+        );
 
-  const discountAmount = roundCurrency(
-    gross * (discountPercent / 100)
-  );
+        const discountAmount = roundCurrency(
+          gross * (discountPercent / 100)
+        );
 
-  const subTotal = roundCurrency(
-    gross - discountAmount
-  );
-        
+        const subTotal = roundCurrency(
+          gross - discountAmount
+        );
+
 
         return {
           productId: item.productId,
           quantity: item.quantity,
           unitPrice: unitPrice.toFixed(2),
-          discountAmount:discountAmount.toFixed(2),      
+          discountAmount: discountAmount.toFixed(2),
           subtotal: subTotal,
           selectedOptions: item.selectedOptions,
         };
@@ -238,7 +249,7 @@ const productData=new Map(
                 orderStatuses.pending,
                 orderStatuses.inPreparation,
                 orderStatuses.ready,
-                 orderStatuses.delivered,
+                orderStatuses.delivered,
               ]),
           ),
         )
@@ -299,15 +310,15 @@ const productData=new Map(
 
         await tx.insert(orderDetails).values(
           detailValues.map((detail) => ({
-           
+
             orderId: activeOrder.orderId,
             productId: detail.productId,
             quantity: detail.quantity,
             unitPrice: detail.unitPrice,
-            discountAmount:detail.discountAmount,
+            discountAmount: detail.discountAmount,
             subtotal: detail.subtotal.toFixed(2),
             selectedOptions: detail.selectedOptions,
-             clientId: parsed.clientId ?? null,
+            clientId: parsed.clientId ?? null,
           })),
         );
 
@@ -454,7 +465,7 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
 
     const stateParam = normalizeOrderState(stateValue);
 
-    const pendingPayment=req.query.pendingPayment==="true";
+    const pendingPayment = req.query.pendingPayment === "true";
 
     const query = db
       .select({
@@ -477,11 +488,11 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
       .leftJoin(modifierGroups, eq(products.productId, modifierGroups.productId))
       .leftJoin(modifierOptions, eq(modifierGroups.id, modifierOptions.groupId));
 
-const whereConditions=[
-  eq(tables.businessId,businessId),
-  ...(stateParam ? [eq(orders.state,stateParam)]:[]),
-  ...(pendingPayment ? [isNull(orders.paidAt)]:[]),
-];
+    const whereConditions = [
+      eq(tables.businessId, businessId),
+      ...(stateParam ? [eq(orders.state, stateParam)] : []),
+      ...(pendingPayment ? [isNull(orders.paidAt)] : []),
+    ];
 
 
     // const rows = stateParam
@@ -498,9 +509,9 @@ const whereConditions=[
     //     .orderBy(desc(orders.date), desc(orders.orderId));
 
     //nuevo
-    const rows =await query
-    .where(and(...whereConditions))
-    .orderBy(desc(orders.date),desc(orders.orderId));
+    const rows = await query
+      .where(and(...whereConditions))
+      .orderBy(desc(orders.date), desc(orders.orderId));
 
     const ordersById = new Map<number, {
       order: typeof rows[number]["order"];
@@ -590,6 +601,374 @@ const whereConditions=[
   }
 };
 
+//Esto es para obtener la analítica de ventas, y que se utiliza para generar el reporte de ventas con Gemini.
+export const buildSalesAnalytics = async (
+  businessId: number,
+  period: "today" | "week" | "month" | "year",
+) => {
+  const now = new Date();
+
+  let startDate: Date;
+  let endDate: Date;
+
+  if (period === "week") {
+    startDate = new Date(now);
+
+    const day = startDate.getDay();
+    const daysFromMonday = day === 0 ? 6 : day - 1;
+
+    startDate.setDate(startDate.getDate() - daysFromMonday);
+    startDate.setHours(0, 0, 0, 0);
+
+    endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 7);
+  } else if (period === "month") {
+    startDate = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      1,
+      0,
+      0,
+      0,
+      0,
+    );
+
+    endDate = new Date(
+      now.getFullYear(),
+      now.getMonth() + 1,
+      1,
+      0,
+      0,
+      0,
+      0,
+    );
+  } else if (period === "year") {
+    startDate = new Date(
+      now.getFullYear(),
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+    );
+
+    endDate = new Date(
+      now.getFullYear() + 1,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+    );
+  } else {
+    startDate = new Date(now);
+    startDate.setHours(0, 0, 0, 0);
+
+    endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 1);
+  }
+
+  const [salesSummary] = await db
+    .select({
+      totalSales: sum(orders.total),
+      totalOrders: count(orders.orderId),
+    })
+    .from(orders)
+    .innerJoin(tables, eq(orders.tableId, tables.id))
+    .where(
+      and(
+        eq(tables.businessId, businessId),
+        eq(orders.state, orderStatuses.paid),
+        gte(orders.paidAt, startDate),
+        lt(orders.paidAt, endDate),
+      ),
+    );
+
+  const totalSales = Number(salesSummary?.totalSales ?? 0);
+  const totalOrders = Number(salesSummary?.totalOrders ?? 0);
+
+  const averageOrder =
+    totalOrders > 0 ? totalSales / totalOrders : 0;
+
+  const [cancelledSummary] = await db
+    .select({
+      cancelledOrders: count(orders.orderId),
+    })
+    .from(orders)
+    .innerJoin(tables, eq(orders.tableId, tables.id))
+    .where(
+      and(
+        eq(tables.businessId, businessId),
+        eq(orders.state, orderStatuses.cancelled),
+        gte(orders.date, startDate),
+        lt(orders.date, endDate),
+      ),
+    );
+
+  const cancelledOrders = Number(
+    cancelledSummary?.cancelledOrders ?? 0,
+  );
+
+  const [bestProduct] = await db
+    .select({
+      productId: products.productId,
+      productName: products.productName,
+      quantity: sum(orderDetails.quantity),
+    })
+    .from(orderDetails)
+    .innerJoin(
+      orders,
+      eq(orderDetails.orderId, orders.orderId),
+    )
+    .innerJoin(
+      tables,
+      eq(orders.tableId, tables.id),
+    )
+    .innerJoin(
+      products,
+      eq(orderDetails.productId, products.productId),
+    )
+    .where(
+      and(
+        eq(tables.businessId, businessId),
+        eq(products.businessId, businessId),
+        eq(orders.state, orderStatuses.paid),
+        gte(orders.paidAt, startDate),
+        lt(orders.paidAt, endDate),
+      ),
+    )
+    .groupBy(
+      products.productId,
+      products.productName,
+    )
+    .orderBy(
+      desc(sum(orderDetails.quantity)),
+    )
+    .limit(1);
+
+  const peakHours = await db
+    .select({
+      hour: sql<number>`
+      EXTRACT(
+        HOUR FROM ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica'
+      )
+    `,
+      orders: count(orders.orderId),
+    })
+    .from(orders)
+    .innerJoin(
+      tables,
+      eq(orders.tableId, tables.id),
+    )
+    .where(
+      and(
+        eq(tables.businessId, businessId),
+        eq(orders.state, orderStatuses.paid),
+        gte(orders.paidAt, startDate),
+        lt(orders.paidAt, endDate),
+      ),
+    )
+    .groupBy(
+      sql`
+    EXTRACT(
+      HOUR FROM ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica'
+    )
+  `,
+    )
+    .orderBy(
+      desc(count(orders.orderId)),
+    );
+
+  const salesByPeriod = await db
+    .select({
+      label:
+        period === "today"
+          ? sql<string>`
+        TO_CHAR(
+          ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+          'HH24:00'
+        )
+      `
+          : period === "year"
+            ? sql<string>`
+          TO_CHAR(
+            ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+            'YYYY-MM'
+          )
+        `
+            : sql<string>`
+          TO_CHAR(
+            ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+            'YYYY-MM-DD'
+          )
+        `,
+      sales: sum(orders.total),
+    })
+    .from(orders)
+    .innerJoin(
+      tables,
+      eq(orders.tableId, tables.id),
+    )
+    .where(
+      and(
+        eq(tables.businessId, businessId),
+        eq(orders.state, orderStatuses.paid),
+        gte(orders.paidAt, startDate),
+        lt(orders.paidAt, endDate),
+      ),
+    )
+    .groupBy(
+      period === "today"
+        ? sql`
+        TO_CHAR(
+          ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+          'HH24:00'
+        )
+      `
+        : period === "year"
+          ? sql`
+          TO_CHAR(
+            ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+            'YYYY-MM'
+          )
+        `
+          : sql`
+          TO_CHAR(
+            ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+            'YYYY-MM-DD'
+          )
+        `,
+    )
+    .orderBy(
+      period === "today"
+        ? sql`
+        TO_CHAR(
+          ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+          'HH24:00'
+        )
+      `
+        : period === "year"
+          ? sql`
+          TO_CHAR(
+            ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+            'YYYY-MM'
+          )
+        `
+          : sql`
+          TO_CHAR(
+            ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+            'YYYY-MM-DD'
+          )
+        `,
+    );
+
+  const totalProcessedOrders =
+    totalOrders + cancelledOrders;
+
+  const cancellationRate =
+    totalProcessedOrders > 0
+      ? (cancelledOrders / totalProcessedOrders) * 100
+      : 0;
+
+  return {
+    period,
+
+    dateRange: {
+      start: startDate,
+      end: endDate,
+    },
+
+    summary: {
+      totalSales: Number(totalSales.toFixed(2)),
+      totalOrders,
+      averageOrder: Number(
+        averageOrder.toFixed(2),
+      ),
+    },
+
+    salesByPeriod: salesByPeriod.map((item) => ({
+      label: item.label,
+      sales: Number(item.sales ?? 0),
+    })),
+
+    bestProduct: bestProduct
+      ? {
+        productId: bestProduct.productId,
+        name: bestProduct.productName,
+        quantity: Number(
+          bestProduct.quantity ?? 0,
+        ),
+      }
+      : null,
+
+    peakHours: peakHours.map((item) => ({
+      hour: Number(item.hour),
+      orders: Number(item.orders),
+    })),
+
+
+
+    cancellations: {
+      total: cancelledOrders,
+      rate: Number(
+        cancellationRate.toFixed(2),
+      ),
+    },
+  };
+};
+
+
+//Este es el controlador para obtener la analítica de ventas, que se utiliza para generar el reporte de ventas con Gemini.
+export const getSalesAnalytics = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
+
+    const rawPeriod = req.query.period;
+
+    const period =
+      typeof rawPeriod === "string"
+        ? rawPeriod.toLowerCase()
+        : "today";
+
+    if (
+      period !== "today" &&
+      period !== "week" &&
+      period !== "month"&&
+      period !== "year"
+    ) {
+      return res.status(400).json({
+        message: "Periodo no válido",
+      });
+    }
+
+    const analytics = await buildSalesAnalytics(
+      businessId,
+      period,
+    );
+
+    return res.status(200).json(analytics);
+  } catch (error) {
+    console.error(
+      "Error obteniendo analítica de ventas:",
+      error,
+    );
+
+    return res.status(500).json({
+      message: "No se pudo obtener la analítica de ventas",
+    });
+  }
+};
 
 //obtener el estado de la order
 export const getOrderStatus = async (req: Request, res: Response) => {
@@ -603,14 +982,14 @@ export const getOrderStatus = async (req: Request, res: Response) => {
     }
 
     const [order] = await db
-  .select({
-    orderId: orders.orderId,
-    state: orders.state,
-  })
-  .from(orders)
-  .innerJoin(tables, eq(orders.tableId, tables.id))
-  .where(eq(orders.orderId, orderId))
-  .limit(1);
+      .select({
+        orderId: orders.orderId,
+        state: orders.state,
+      })
+      .from(orders)
+      .innerJoin(tables, eq(orders.tableId, tables.id))
+      .where(eq(orders.orderId, orderId))
+      .limit(1);
 
     if (!order) {
       return res.status(404).json({
@@ -694,3 +1073,4 @@ export const getActiveOrder = async (req: Request, res: Response) => {
     });
   }
 };
+
