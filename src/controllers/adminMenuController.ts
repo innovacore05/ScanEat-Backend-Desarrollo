@@ -66,6 +66,7 @@ export const getProducts = async (
         image: products.image,
         rating: products.rating,
         categoryId: products.categoryId,
+        discount: products.discount,
       })
       .from(products)
       .leftJoin(
