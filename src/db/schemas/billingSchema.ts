@@ -64,7 +64,7 @@ totalSale:money("total_sale").notNull().default("0"),
 totalDiscount:money("total_discount").notNull().default("0"),
 totalNetSale:money("total_net_sale").notNull().default("0"),
 totalTax:money("total_tax").notNull().default("0"),
-totalOtherCHarges:money("total_other_charges").notNull().default("0"),
+totalOtherCharges:money("total_other_charges").notNull().default("0"),
 totalVoucher:money("total_voucher").notNull().default("0"),
 haciendaStatus:varchar("hacienda_status",{length:20})
 .notNull()

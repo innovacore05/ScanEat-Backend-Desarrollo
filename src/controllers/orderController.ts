@@ -25,12 +25,63 @@ import {
   orderDetails,
   orders,
   orderStatusSchema,
+  type CreateOrderInput
 } from "../db/schemas/orderSchema";
 
-const TAX_RATE = 0.13;
+
 
 const roundCurrency = (value: number) =>
   Math.round((value + Number.EPSILON) * 100) / 100;
+
+//validar descuentos antuos o guardados que no sean del formulario
+const hasValidDiscount = (value: unknown): boolean => {
+  const discount = Number(value ?? 0);
+
+  return (
+    Number.isFinite(discount) &&
+    discount >= 0 &&
+    discount <= 100
+  );
+};
+
+//nuevo:calcula la linea una vez para cotizar y crear la orden
+type ProductPricingData = {
+  price: number;
+  discount: number;
+  cabysCode: string;
+  ivaRate: number | null;
+  ivaRateCode: string;
+};
+
+const calculateOrderLines = (
+  items: CreateOrderInput["items"],
+  productData: Map<number, ProductPricingData>,
+) =>
+  items.map((item) => {
+    const product = productData.get(item.productId)!;
+    const ivaRate = product.ivaRate!;
+
+    const gross = roundCurrency(product.price * item.quantity);
+    const discountAmount = roundCurrency(
+      gross * (product.discount / 100),
+    );
+    const subtotal = roundCurrency(gross - discountAmount);
+    const taxAmount = roundCurrency(subtotal * (ivaRate / 100));
+
+    return {
+      productId: item.productId,
+      quantity: item.quantity,
+      unitPrice: product.price.toFixed(2),
+      discountAmount: discountAmount.toFixed(2),
+      subtotal,
+      taxAmount,
+      cabysCode: product.cabysCode,
+      ivaRate: ivaRate.toFixed(2),
+      ivaRateCode: product.ivaRateCode,
+      selectedOptions: item.selectedOptions,
+    };
+  });
+
 
 const normalizeOrderState = (value?: string) => {
   if (!value) return undefined;
@@ -132,14 +183,230 @@ const transitionOrderState = async (
   }
 };
 
+//nuevo:consulta la mesa y los productos pero no realzia ningu anmodificacion ocrea ordenes
+//POST /orders/quote calcula el resumen sin guardar el pedido
+export const quoteOrder = async (req: Request, res: Response) => {
+  const parsedBody = createOrderSchema.safeParse(req.body);
+
+  if (!parsedBody.success) {
+    return res.status(400).json({
+      message: "Los datos del pedido no son válidos",
+      errors: parsedBody.error.flatten(),
+    });
+  }
+
+  const parsed = parsedBody.data;
+
+  try {
+    const [table] = await db
+      .select({
+        id: tables.id,
+        businessId: tables.businessId,
+      })
+      .from(tables)
+      .where(
+        and(
+          eq(tables.id, parsed.tableId),
+          eq(tables.active, true),
+        ),
+      )
+      .limit(1);
+
+    if (!table) {
+      return res.status(404).json({
+        message: "Mesa no encontrada o inactiva",
+      });
+    }
+
+//  cotizar solo si la orden activa acepta productos
+const [activeOrder] = await db
+  .select({ state: orders.state })
+  .from(orders)
+  .where(
+    and(
+      eq(orders.tableId, parsed.tableId),
+      inArray(orders.state, [
+        orderStatuses.pending,
+        orderStatuses.inPreparation,
+        orderStatuses.ready,
+        orderStatuses.delivered,
+      ]),
+    ),
+  )
+  .limit(1);
+
+if (activeOrder && activeOrder.state !== orderStatuses.pending) {
+  return res.status(409).json({
+    message: "La orden de esta mesa ya está siendo procesada",
+  });
+}
+
+
+
+    const productRows = await db
+      .select({
+        productId: products.productId,
+        price: products.price,
+        discount: products.discount,
+        businessId: products.businessId,
+        cabysCode: products.cabysCode,
+        ivaRate: products.ivaRate,
+        ivaRateCode: products.ivaRateCode,
+      })
+      .from(products)
+      .where(
+        inArray(
+          products.productId,
+          parsed.items.map((item) => item.productId),
+        ),
+      );
+
+    const missingProduct = parsed.items.find(
+      (item) =>
+        !productRows.some((product) => product.productId === item.productId),
+    );
+
+    if (missingProduct) {
+      return res.status(404).json({
+        message: `Producto no encontrado: ${missingProduct.productId}`,
+      });
+    }
+
+    const wrongBusinessProduct = productRows.find(
+      (product) => product.businessId !== table.businessId,
+    );
+
+    if (wrongBusinessProduct) {
+      return res.status(403).json({
+        message: "El producto no pertenece al negocio de la mesa",
+      });
+    }
+
+    const productMissingFiscalData = productRows.find((product) => {
+      const ivaRate =
+        product.ivaRate === null ? null : Number(product.ivaRate);
+
+      return (
+        !product.cabysCode ||
+        !/^\d{13}$/.test(product.cabysCode) ||
+        !product.ivaRateCode ||
+        ivaRate === null ||
+        !Number.isFinite(ivaRate) ||
+        ivaRate <= 0 ||
+        ivaRate > 100
+      );
+    });
+
+    if (productMissingFiscalData) {
+      return res.status(409).json({
+        message:
+          `El producto ${productMissingFiscalData.productId} no tiene CABYS e IVA configurados.`,
+      });
+    }
+
+//no permitir que se coticen productos con descuentos fuera del rango permitido
+
+const productWithInvalidDiscount = productRows.find(
+  (product: (typeof productRows)[number]) =>
+    !hasValidDiscount(product.discount),
+);
+
+if (productWithInvalidDiscount) {
+  return res.status(409).json({
+    message:
+      `El producto ${productWithInvalidDiscount.productId} tiene un descuento inválido. ` +
+      "Corrige el descuento antes de cotizar el pedido.",
+  });
+}
+
+
+    const productData = new Map<number, ProductPricingData>(
+      productRows.map((product) => [
+        product.productId,
+        {
+          price: Number(product.price),
+          discount: Number(product.discount ?? 0),
+          cabysCode: product.cabysCode!,
+          ivaRate:
+            product.ivaRate === null ? null : Number(product.ivaRate),
+          ivaRateCode: product.ivaRateCode,
+        },
+      ]),
+    );
+
+  
+    const lines = calculateOrderLines(parsed.items, productData);
+
+    const subtotal = roundCurrency(
+      lines.reduce((sum, line) => sum + line.subtotal, 0),
+    );
+    const discount = roundCurrency(
+      lines.reduce((sum, line) => sum + Number(line.discountAmount), 0),
+    );
+
+    const subtotalBeforeDiscount = roundCurrency(
+  lines.reduce(
+    (sum, line) =>
+      sum +
+      roundCurrency(Number(line.unitPrice) * line.quantity),
+    0,
+  ),
+);
+
+    const tax = roundCurrency(
+      lines.reduce((sum, line) => sum + line.taxAmount, 0),
+    );
+    const total = roundCurrency(subtotal + tax);
+
+    return res.status(200).json({
+      lines: lines.map((line) => ({
+        productId: line.productId,
+        quantity: line.quantity,
+        unitPrice: Number(line.unitPrice),
+        discountAmount: Number(line.discountAmount),
+        subtotal: line.subtotal,
+        ivaRate: Number(line.ivaRate),
+        taxAmount: line.taxAmount,
+        total: roundCurrency(line.subtotal + line.taxAmount),
+      })),
+      totals: {
+        subtotalBeforeDiscount, 
+        subtotal,
+        discount,
+        tax,
+        total,
+      },
+    });
+  } catch (error) {
+    console.error("Error cotizando el pedido:", error);
+
+    return res.status(500).json({
+      message: "No se pudo calcular el resumen del pedido",
+    });
+  }
+};
+
+//__________________________
+
 //Crear orden
 export const createOrder = async (req: Request, res: Response) => {
-  const parsed = createOrderSchema.parse(req.body);
+  //cabys:validacion de datos y error si el cuerpo no cumple
+  const parsedBody = createOrderSchema.safeParse(req.body);
+
+  if (!parsedBody.success) {
+    return res.status(400).json({
+      message: "Los datos del pedido no son válidos",
+      errors: parsedBody.error.flatten(),
+    });
+  }
+
+  const parsed = parsedBody.data;
 
   try {
     const result = await db.transaction(async (tx) => {
       const [table] = await tx
-        .select({ id: tables.id, businessId: tables.businessId, })
+        .select({ id: tables.id, 
+          businessId: tables.businessId, })
         .from(tables)
         .where(and(
           eq(tables.id, parsed.tableId),
@@ -151,6 +418,9 @@ export const createOrder = async (req: Request, res: Response) => {
       if (!table) {
         return { type: "table-not-found" as const };
       }
+
+
+
       //get precio
       const productRows = await tx
         .select({
@@ -158,6 +428,10 @@ export const createOrder = async (req: Request, res: Response) => {
           price: products.price,
           businessId: products.businessId,
           discount: products.discount,
+          //cabys:se pasa la informacion al pedido 
+          cabysCode: products.cabysCode,
+          ivaRate: products.ivaRate,
+          ivaRateCode: products.ivaRateCode,
         })
         .from(products)
         .where(
@@ -167,22 +441,20 @@ export const createOrder = async (req: Request, res: Response) => {
           ),
         );
 
-      // const prices = new Map
-      //   (productRows.map((product) =>
-      //     [product.productId,
-      //     Number(product.price),
-      //     ]),
-      //   );
-      //nuevo:precio+decuento:
-      const productData = new Map(
-        productRows.map((product) => [
-          product.productId,
-          {
-            price: Number(product.price),
-            discount: Number(product.discount ?? 0),
-          },
-        ]),
-      );
+   
+     const productData = new Map<number, ProductPricingData>(
+  productRows.map((product) => [
+    product.productId,
+    {
+      price: Number(product.price),
+      discount: Number(product.discount ?? 0),
+      cabysCode: product.cabysCode!,
+      ivaRate:
+        product.ivaRate === null ? null : Number(product.ivaRate),
+      ivaRateCode: product.ivaRateCode,
+    },
+  ]),
+);
 
       const missingProduct = parsed.items.find((item) =>
         !productData.has(item.productId),
@@ -192,8 +464,8 @@ export const createOrder = async (req: Request, res: Response) => {
           type: "product-not-found" as const,
           productId: missingProduct.productId
         };
-      };
-
+      }
+//verificacion de negocio
       const wrongBusinessProduct = productRows.find(
         (product) => product.businessId !== table.businessId
       );
@@ -204,92 +476,104 @@ export const createOrder = async (req: Request, res: Response) => {
           productId: wrongBusinessProduct.productId,
         };
       }
+//cabys:el pedido no se puede crear si falta info fiscal
+ const productMissingFiscalData = 
+ productRows.find((product) => {
 
-      //detalle cliente:
-      const detailValues = parsed.items.map((item) => {
-        const product = productData.get(item.productId)!;
-        //nuevo
-        const unitPrice = product.price;
-        const discountPercent = product.discount;
+        const ivaRate =
+          product.ivaRate === null ? null : Number(product.ivaRate);
 
-        const gross = roundCurrency(
-          unitPrice * item.quantity
+        return (
+          !product.cabysCode ||
+          !/^\d{13}$/.test(product.cabysCode) ||
+          !product.ivaRateCode ||
+          ivaRate === null ||
+          !Number.isFinite(ivaRate) ||
+          ivaRate <= 0 ||
+          ivaRate > 100
         );
-
-        const discountAmount = roundCurrency(
-          gross * (discountPercent / 100)
-        );
-
-        const subTotal = roundCurrency(
-          gross - discountAmount
-        );
-
-
-        return {
-          productId: item.productId,
-          quantity: item.quantity,
-          unitPrice: unitPrice.toFixed(2),
-          discountAmount: discountAmount.toFixed(2),
-          subtotal: subTotal,
-          selectedOptions: item.selectedOptions,
-        };
       });
 
+      if (productMissingFiscalData) {
+        return {
+          type: "product-missing-fiscal" as const,
+          productId: productMissingFiscalData.productId,
+        };
+      }
+
+//bloquear pedido si un producto tiene un descuento menor a 0% y mayor 100%
+const productWithInvalidDiscount = 
+productRows.find(
+  (product: (typeof productRows)[number]) =>
+    !hasValidDiscount(product.discount),
+);
+
+if (productWithInvalidDiscount) {
+  return {
+    type: "product-invalid-discount" as const,
+    productId: productWithInvalidDiscount.productId,
+  };
+}
+
+
+      //detalle cliente:
+   // CAMBIO: createOrder usa el mismo cálculo que quoteOrder.
+const detailValues = calculateOrderLines(parsed.items, productData);
 
       //nuevo:la mesa tiene una orden activa?
 
-      const [activeOrder] = await tx
-        .select()
-        .from(orders)
-        .where(
-          and(
-            eq(orders.tableId, parsed.tableId),
-            inArray(orders.state,
-              [
-                orderStatuses.pending,
-                orderStatuses.inPreparation,
-                orderStatuses.ready,
-                orderStatuses.delivered,
-              ]),
-          ),
-        )
-        .limit(1);
+    const [activeOrder] = await tx
+  .select()
+  .from(orders)
+  .where(
+    and(
+      eq(orders.tableId, parsed.tableId),
+      inArray(orders.state, [
+        orderStatuses.pending,
+        orderStatuses.inPreparation,
+        orderStatuses.ready,
+        orderStatuses.delivered,
+      ]),
+    ),
+  )
+  .limit(1);
 
-      console.log("ACTIVE ORDER:", activeOrder);
-      //si la orden activa , y , si el estado de la orden 
-      //activa es no pendiente, entonces va a retornar que 
-      //la orden ya esta procesandose, y que laorden esta activa
-      if (activeOrder) {
-        if (activeOrder.state !== orderStatuses.pending) {
-          return {
-            type: "order-already-processing" as const,
-            order: activeOrder,
-          };
-        }
+if (activeOrder) {
+  if (activeOrder.state !== orderStatuses.pending) {
+    return {
+      type: "order-already-processing" as const,
+      order: activeOrder,
+    };
+  }
 
+
+ const addedSubtotal = roundCurrency(
+          detailValues.reduce((sum, detail) => sum + detail.subtotal, 0),
+        );
+         const addedTax = roundCurrency(
+          detailValues.reduce((sum, detail) => sum + detail.taxAmount, 0),
+        );
+
+        const newSubtotal = roundCurrency(
+          Number(activeOrder.subtotal) + addedSubtotal,
+        );
 
         //calculos de los productos agregados actuales y los que vienen
 
-        const newItemSubtotal = roundCurrency(
-          detailValues.reduce(
-            (sum, detail) => sum + detail.subtotal,
-            0,
-          ),
-        );
-        //sumar los nuevos montos agregados
-        const currentSubtotal = Number(activeOrder.subtotal);
-        const newSubtotal = roundCurrency(
-          currentSubtotal + newItemSubtotal,
-        );
+        // const newItemSubtotal = roundCurrency(
+        //   detailValues.reduce(
+        //     (sum, detail) => sum + detail.subtotal,
+        //     0,
+        //   ),
+        // );
+        // //sumar los nuevos montos agregados
+        // const currentSubtotal = Number(activeOrder.subtotal);
+    
 
         //cambiar a futuro tomando en cuenta hacienda
-        const newTax = roundCurrency(
-          newSubtotal * TAX_RATE,
-        );
-        //recalculo del total
-        const newTotal = roundCurrency(
-          newSubtotal + newTax,
-        );
+      const newTax = roundCurrency(Number(activeOrder.tax) + addedTax);
+        const newTotal = roundCurrency(newSubtotal + newTax);
+
 
         //actaulzia rorder
         const [updateOrder] = await tx
@@ -317,6 +601,10 @@ export const createOrder = async (req: Request, res: Response) => {
             unitPrice: detail.unitPrice,
             discountAmount: detail.discountAmount,
             subtotal: detail.subtotal.toFixed(2),
+            taxAmount: detail.taxAmount.toFixed(2),
+            cabysCode: detail.cabysCode,
+            ivaRate: detail.ivaRate,
+            ivaRateCode: detail.ivaRateCode,
             selectedOptions: detail.selectedOptions,
             clientId: parsed.clientId ?? null,
           })),
@@ -334,11 +622,11 @@ export const createOrder = async (req: Request, res: Response) => {
       const subtotal = roundCurrency(
         detailValues.reduce(
           (sum, detail) => sum + detail.subtotal,
-          0,
-        ),
-      );
-      const tax = roundCurrency(
-        subtotal * TAX_RATE,
+          0, ), 
+        );
+
+        const tax = roundCurrency(
+        detailValues.reduce((sum, detail) => sum + detail.taxAmount, 0),
       );
 
       const total = roundCurrency(
@@ -358,14 +646,18 @@ export const createOrder = async (req: Request, res: Response) => {
         .returning();
 
       // Guardar los productos de la nueva orden
-      await tx.insert(orderDetails).values(
-        detailValues.map((detail) => ({
+      await tx.insert(orderDetails).values(   
+           detailValues.map((detail) => ({
           orderId: order.orderId,
           productId: detail.productId,
           quantity: detail.quantity,
           unitPrice: detail.unitPrice,
           discountAmount: detail.discountAmount,
           subtotal: detail.subtotal.toFixed(2),
+          taxAmount: detail.taxAmount.toFixed(2),
+          cabysCode: detail.cabysCode,
+          ivaRate: detail.ivaRate,
+          ivaRateCode: detail.ivaRateCode,
           selectedOptions: detail.selectedOptions,
           clientId: parsed.clientId ?? null,
         })),
@@ -395,6 +687,21 @@ export const createOrder = async (req: Request, res: Response) => {
       });
     }
 
+//cabys:informar queproducto necesita cabys/iva
+  if (result.type === "product-missing-fiscal") {
+      return res.status(409).json({
+        message:
+          `El producto ${result.productId} no tiene CABYS e IVA configurados. Revisa el producto antes de crear el pedido.`,
+      });
+    }
+
+if (result.type === "product-invalid-discount") {
+  return res.status(409).json({
+    message:
+      `El producto ${result.productId} tiene un descuento inválido. ` +
+      "Corrige el descuento antes de crear el pedido.",
+  });
+}
 
     if (result.type === "order-already-processing") {
       return res.status(409).json({

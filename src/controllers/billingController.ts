@@ -7,23 +7,55 @@ import { orderDetails,orders,orderStatuses } from "../db/schemas/orderSchema";
 import { tables } from "../db/schemas/mesaSchema";  
 import { products } from "../db/schemas/adminMenuSchema";   
 
-import  {payments, receiptDetails, receipts } from "../db/schemas/billingSchema";
+import  {payments, receiptDetails, receiptTaxes,receipts } from "../db/schemas/billingSchema";
 
-const TAX_RATE=0.13;
+
 
 const roundCurrency=(value:number)=>
     Math.round((value+Number.EPSILON) * 100) /100; 
     
-type LineRow={
-  detail:{
-    detailId:number;
-    quantity:number;
-    unitPrice:string;
-    discountAmount:string;
-    subtotal:string;
+type LineRow = {
+  detail: {
+    detailId: number;
+    productId: number;
+    quantity: number;
+    unitPrice: string;
+    discountAmount: string;
+    subtotal: string;
+    cabysCode: string | null;
+    ivaRate: string | null;
+    ivaRateCode: string | null;
+    taxAmount: string | null;
   };
-  product:{productName:string};
+  product: {
+    productName: string;
+  };
 };
+
+const findMissingFiscalLine = (rows: LineRow[]) =>
+  rows.find(({ detail }) => {
+    const ivaRate =
+      detail.ivaRate === null ? null : Number(detail.ivaRate);
+    const taxAmount =
+      detail.taxAmount === null ? null : Number(detail.taxAmount);
+
+    return (
+      !detail.cabysCode ||
+      !/^\d{13}$/.test(detail.cabysCode) ||
+      !detail.ivaRateCode ||
+      !/^\d{2}$/.test(detail.ivaRateCode) ||
+      ivaRate === null ||
+      !Number.isFinite(ivaRate) ||
+      ivaRate <= 0 ||
+      ivaRate > 100 ||
+      taxAmount === null ||
+      !Number.isFinite(taxAmount) ||
+      taxAmount < 0
+    );
+  });
+
+
+
 const buildLines = (rows: LineRow[]) =>
   rows.map((row) => {
     const unitPrice = Number(row.detail.unitPrice);
@@ -31,10 +63,11 @@ const buildLines = (rows: LineRow[]) =>
     const discount = Number(row.detail.discountAmount);
     const subtotal = Number(row.detail.subtotal);
 
+   const tax = Number(row.detail.taxAmount);
     const gross = roundCurrency(unitPrice * quantity);
-    const tax = roundCurrency(subtotal * TAX_RATE);
     const total = roundCurrency(subtotal + tax);
 
+    
     return {
       detailId: row.detail.detailId,
       detail: row.product.productName,
@@ -44,11 +77,18 @@ const buildLines = (rows: LineRow[]) =>
       discount: discount.toFixed(2),
       subtotal: row.detail.subtotal,
       tax: tax.toFixed(2),
+      //cabys
+        cabysCode: row.detail.cabysCode!,
+      ivaRate: row.detail.ivaRate!,
+      ivaRateCode: row.detail.ivaRateCode!,
+
       total: total.toFixed(2),
     };
   });
 
-export const getPaymentPreview = async (req: AuthRequest, res: Response) => {
+export const getPaymentPreview = async (
+  req: AuthRequest, 
+  res: Response,) => {
   try {
     const orderId = Number(req.params.orderId);
     const businessId = req.user?.business_id;
@@ -65,21 +105,26 @@ export const getPaymentPreview = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    const rows = await db
-      .select({
-        order: orders,
-        table: tables,
-        detail: orderDetails,
-        product: products,
-      })
-      .from(orders)
-      .innerJoin(tables, eq(orders.tableId, tables.id))
-      .innerJoin(orderDetails, eq(orders.orderId, orderDetails.orderId))
-      .innerJoin(products, eq(orderDetails.productId, products.productId))
-      .where(
-        and(eq(orders.orderId, orderId), eq(tables.businessId, businessId)),
-      );
-
+  const rows = await db
+  .select({
+    order: orders,
+    table: tables,
+    detail: orderDetails,
+    product: {
+      productName: products.productName,
+    },
+  })
+  .from(orders)
+  .innerJoin(tables, eq(orders.tableId, tables.id))
+  .innerJoin(orderDetails, eq(orders.orderId, orderDetails.orderId))
+  // cambys: relaciona cada detalle con su producto para obtener el nombre
+  .innerJoin(products, eq(orderDetails.productId, products.productId))
+  .where(
+    and(
+      eq(orders.orderId, orderId),
+      eq(tables.businessId, businessId),
+    ),
+  );
     if (rows.length === 0) {
       return res.status(404).json({ message: "Orden no encontrada" });
     }
@@ -93,6 +138,19 @@ export const getPaymentPreview = async (req: AuthRequest, res: Response) => {
       return res
         .status(409)
         .json({ message: "La orden no está pendiente de cobro" });
+    }
+
+
+
+    // cabys:no mostrar un cobro si faltan datos fiscales
+    const missingFiscalLine = findMissingFiscalLine(rows);
+
+    if (missingFiscalLine) {
+      return res.status(409).json({
+        message:
+          `El producto ${missingFiscalLine.detail.productId} no tiene ` +
+          "CABYS e IVA completos. Revisa el producto o vuelve a crear el pedido.",
+      });
     }
 
     const lines = buildLines(rows);
@@ -117,6 +175,8 @@ export const getPaymentPreview = async (req: AuthRequest, res: Response) => {
       },
       missingCabys: [],
     });
+
+
   } catch (error) {
     console.error("Error obteniendo preview de pago:", error);
 
@@ -190,6 +250,23 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
       const { order, table } = rows[0];
       const total = Number(order.total);
 
+//cabys:valida los datos fiscales antes de marar pagado
+  const missingFiscalLine = findMissingFiscalLine(rows);
+ 
+
+      if (missingFiscalLine) {
+        return {
+          type: "missing-fiscal" as const,
+          productId: missingFiscalLine.detail.productId,
+        };
+      }
+
+      if (
+        order.state !== orderStatuses.delivered ||
+        order.paidAt
+      ) {
+        return { type: "not-payable" as const };
+      }
       // se valida ANTES de marcar la orden como pagada
       if (payload.method === "cash" && payload.amountTendered < total) {
         return { type: "insufficient" as const };
@@ -198,8 +275,10 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
       // "reclama" la orden: si otro cobro ya la tomó, no devuelve filas
       const [claimed] = await tx
         .update(orders)
-        .set({ state: orderStatuses.paid, paidAt: new Date() })
-        .where(
+        .set({
+          state: orderStatuses.paid,
+          paidAt: new Date(),
+        }) .where(
           and(
             eq(orders.orderId, orderId),
             eq(orders.state, orderStatuses.delivered),
@@ -223,7 +302,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         .values({
           businessId,
           orderId,
-          documentType: "04", // tiquete electrónico
+          documentType: "04", 
           totalSale: order.total,
           totalDiscount: totalDiscount.toFixed(2),
           totalNetSale: order.subtotal,
@@ -232,20 +311,42 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         })
         .returning();
 
-      await tx.insert(receiptDetails).values(
-        lines.map((line, index) => ({
-          receiptId: receipt.receiptId,
-          orderDetailId: line.detailId,
-          lineNumber: index + 1,
-          cabysCode: "0000000000000", // PENDIENTE: no es un código real
-          detail: line.detail,
-          quantity: String(line.quantity),
-          unitPrice: line.unitPrice,
-          discountAmount: line.discount,
-          subtotal: line.subtotal,
-          taxAmount: line.tax,
-          lineTotal: line.total,
-        })),
+// cabys:guardar el CABYS real del detalle del pedido
+      const savedReceiptLines = await tx
+        .insert(receiptDetails)
+        .values(
+          lines.map((line, index) => ({
+            receiptId: receipt.receiptId,
+            orderDetailId: line.detailId,
+            lineNumber: index + 1,
+            cabysCode: line.cabysCode,
+            detail: line.detail,
+            quantity: String(line.quantity),
+            unitPrice: line.unitPrice,
+            discountAmount: line.discount,
+            subtotal: line.subtotal,
+            taxAmount: line.tax,
+            lineTotal: line.total,
+          })),
+        )
+        .returning({
+          detailId: receiptDetails.detailId,
+          lineNumber: receiptDetails.lineNumber,
+        });
+
+     // cabys: guardar tarifa y monto de IVA 
+      await tx.insert(receiptTaxes).values(
+        savedReceiptLines.map((savedLine) => {
+          const line = lines[savedLine.lineNumber - 1];
+
+          return {
+            detailId: savedLine.detailId,
+            taxCode: "01",
+            taxRateCode: line.ivaRateCode,
+            taxRate: line.ivaRate,
+            amount: line.tax,
+          };
+        }),
       );
 
       const change =
@@ -289,6 +390,15 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
       return res
         .status(409)
         .json({ message: "La orden no está pendiente de cobro" });
+    }
+
+
+ if (result.type === "missing-fiscal") {
+      return res.status(409).json({
+        message:
+          `El producto ${result.productId} no tiene CABYS e IVA completos. ` +
+          "Revisa el producto o vuelve a crear el pedido.",
+      });
     }
 
     const { receipt, table, order, lines, totalDiscount, change } = result;

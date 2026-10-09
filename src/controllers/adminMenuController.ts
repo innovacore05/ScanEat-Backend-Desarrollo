@@ -13,6 +13,8 @@ import {
 } from "../db/schemas/adminMenuSchema";
 import { deleteImageFromStorage, uploadImageToStorage } from "../services/storage.service";
 import { validateImage } from "../utils/validateImage";
+import { isFiscalType,resolveFiscalOption } from "../services/cabys.service";
+
 
 export const getProducts = async (
   req: AuthRequest,
@@ -243,6 +245,13 @@ export const createCategory = async (
     const name = String(req.body?.name ?? "").trim();
     const icon = String(req.body?.icon ?? "").trim();
 
+    const fiscalType=req.body?.fiscalType;
+    if(!isFiscalType(fiscalType)){
+      return res.status(400).json({
+        message: "Selecciona un tipo válido para la categoría",
+      });
+    }
+
     if (!name) {
       return res.status(400).json({
         message: "El nombre de la categoría es obligatorio",
@@ -279,6 +288,7 @@ export const createCategory = async (
       .values({
         name,
         icon,
+        fiscalType,
         businessId,
       })
       .returning();
@@ -403,6 +413,9 @@ export const updateCategory = async (
 
     const name = String(req.body?.name ?? "").trim();
     const icon = String(req.body?.icon ?? "").trim();
+const fiscalType = req.body?.fiscalType;
+
+
 
     // Validamos los datos recibidos
     if (!name) {
@@ -416,6 +429,13 @@ export const updateCategory = async (
         message: "El ícono de la categoría es obligatorio",
       });
     }
+
+
+if (!isFiscalType(fiscalType)) {
+  return res.status(400).json({
+    message: "Selecciona un tipo válido para la categoría",
+  });
+}
 
     // Verificamos que la categoría exista
     // y pertenezca al negocio del usuario
@@ -456,12 +476,35 @@ export const updateCategory = async (
       });
     }
 
-    // Actualizamos la categoría
+//validacion para no cambiar el tipo fiscal si hay productos asociados
+if (category.fiscalType !== fiscalType) {
+  const [assignedProduct] = await db
+    .select({ productId: products.productId })
+    .from(products)
+    .where(
+      and(
+        eq(products.categoryId, categoryId),
+        eq(products.businessId, businessId),
+      ),
+    )
+    .limit(1);
+
+  if (assignedProduct) {
+    return res.status(409).json({
+      message:
+        "No se puede cambiar el tipo fiscal porque esta categoría tiene productos asociados. Mueve los productos a otra categoría primero.",
+    });
+  }
+}
+
+
+    // Actualizamos la categoria
     const [updatedCategory] = await db
       .update(categories)
       .set({
         name,
         icon,
+        fiscalType,
       })
       .where(
         and(
@@ -527,14 +570,17 @@ const normalisePrice = (value: unknown): number => {
   return numericValue;
 };
 
-const normaliseDiscount = (value: unknown, fallback: string = "0") => {
+const normaliseDiscount = (value: unknown, fallback: string = "0"): string => {
   if (value === undefined || value === null || value === "") {
     return fallback;
   }
 
+  
   const numericValue = Number(value);
-  if (!Number.isFinite(numericValue) || numericValue < 0) {
-    throw new Error("El descuento debe ser un número válido");
+
+
+  if (!Number.isFinite(numericValue) || numericValue < 0 || numericValue > 100) {
+    throw new Error("El descuento debe estar entre 0 % y 100 %");
   }
 
   return String(numericValue);
@@ -593,6 +639,18 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
         message: "La categoría seleccionada no existe",
       });
     }
+
+//cabys
+const fiscalSelection = await resolveFiscalOption(
+  category.fiscalType,
+  data.cabysCode,
+);
+
+if ("error" in fiscalSelection) {
+  return res.status(400).json({ message: fiscalSelection.error });
+}
+
+
     //CAMBIO DE GUARDADO DE LOCAL A R2
     // subir la imagen a r2 cloudflare
     const imageUrl = await uploadImageToStorage(req.file!, "products");
@@ -609,7 +667,18 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
         businessId: businessId,
         image: imageUrl,
         rating: "0.0",
-      })
+
+//guardar el cabys y la tarifa 
+ cabysCode: fiscalSelection.option?.cabysCode ?? null,
+    ...(fiscalSelection.option
+      ? {
+          ivaRate: String(fiscalSelection.option.ivaRate),
+          ivaRateCode: fiscalSelection.option.ivaRateCode,
+        }
+      : {}),
+  })
+
+    
       .returning();
 
     return res.status(201).json({
@@ -666,6 +735,17 @@ export const createCustomDish = async (req: AuthRequest, res: Response) => {
       });
     }
 
+//cabys
+const fiscalSelection = await resolveFiscalOption(
+  category.fiscalType,
+  data.cabysCode,
+);
+
+if ("error" in fiscalSelection) {
+  return res.status(400).json({ message: fiscalSelection.error });
+}
+
+
     //subir imagen a r2
     const imageUrl = await uploadImageToStorage(req.file!, "products");
 
@@ -683,7 +763,16 @@ export const createCustomDish = async (req: AuthRequest, res: Response) => {
           image: imageUrl,
           rating: "0.0",
           isCustom: 1,
-        })
+
+//guardar cabys y tarifa
+ cabysCode: fiscalSelection.option?.cabysCode ?? null,
+    ...(fiscalSelection.option
+      ? {
+          ivaRate: String(fiscalSelection.option.ivaRate),
+          ivaRateCode: fiscalSelection.option.ivaRateCode,
+        }
+      : {}),
+  }) 
         .returning();
 
       for (const group of data.optionGroups) {
@@ -773,6 +862,15 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ message: "La categoría seleccionada no existe" });
     }
 
+//cabys
+const fiscalSelection = await resolveFiscalOption(
+  category.fiscalType,
+  req.body?.cabysCode ?? existingProduct.cabysCode,
+);
+if ("error" in fiscalSelection) {
+  return res.status(400).json({ message: fiscalSelection.error });
+}
+
     const nextImage = await normaliseOptionalImage(req, existingProduct.image);
     const nextDiscount = normaliseDiscount(
       req.body?.discount,
@@ -788,6 +886,16 @@ export const updateProduct = async (req: AuthRequest, res: Response) => {
         discount: nextDiscount,
         categoryId,
         image: nextImage,
+
+        //cabys
+cabysCode: fiscalSelection.option?.cabysCode ?? null,
+...(fiscalSelection.option
+  ? {
+      ivaRate: String(fiscalSelection.option.ivaRate),
+      ivaRateCode: fiscalSelection.option.ivaRateCode,
+    }
+  : {}),
+
       })
       .where(
         and(
@@ -875,6 +983,17 @@ export const updateCustomDish = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ message: "La categoría seleccionada no existe" });
     }
 
+//cabys
+const fiscalSelection = await resolveFiscalOption(
+  category.fiscalType,
+  req.body?.cabysCode ?? existingProduct.cabysCode,
+);
+
+if ("error" in fiscalSelection) {
+  return res.status(400).json({ message: fiscalSelection.error });
+}
+
+
     const optionGroups = normaliseOptionGroups(req.body?.optionGroups);
     const nextImage = await normaliseOptionalImage(req, existingProduct.image);
     const nextDiscount = normaliseDiscount(
@@ -907,6 +1026,16 @@ export const updateCustomDish = async (req: AuthRequest, res: Response) => {
           categoryId,
           image: nextImage,
           isCustom: 1,
+
+//cabys
+cabysCode: fiscalSelection.option?.cabysCode ?? null,
+...(fiscalSelection.option
+  ? {
+      ivaRate: String(fiscalSelection.option.ivaRate),
+      ivaRateCode: fiscalSelection.option.ivaRateCode,
+    }
+  : {}),
+
         })
         .where(
           and(
@@ -1076,3 +1205,4 @@ export const deleteCustomProduct = async (req: AuthRequest, res: Response) => {
     return res.status(500).json({ message: "Error al eliminar el platillo personalizado" });
   }
 };
+

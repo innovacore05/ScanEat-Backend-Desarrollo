@@ -6,22 +6,52 @@ import {
   boolean,
   integer,
   varchar,
+  numeric,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import { z } from "zod";
-import { numeric } from "drizzle-orm/pg-core";
+
+
+export const FISCAL_TYPES=
+[
+  "dishes",
+  "hot_drinks",
+  "cold_drinks",
+  "alcohol_drinks",
+  "packaged",
+  
+] as const;
+
+export type FiscalType=(typeof FISCAL_TYPES)[number];
+
 
 export const categories = pgTable("categories", {
   categoryId: serial("category_id").primaryKey(),
-  name: varchar("name", {
-    length: 100,
-  }).notNull(),
-   icon: varchar("icon", {
-    length: 100,
-  }),
-   businessId: integer("business_id").notNull(),
+  name: varchar("name", {length: 100,}).notNull(),
+  icon: varchar("icon", {length: 100, }),
+  fiscalType:varchar("fiscal_type",{length:20}).$type<FiscalType>(),
+  businessId: integer("business_id").notNull(),
 });
+
+
+export type FiscalOptionType = FiscalType;
+
+export const fiscalOptions = pgTable("fiscal_options", {
+  cabysCode: varchar("cabys_code", { length: 13 }).primaryKey(),
+  fiscalType: varchar("fiscal_type", { length: 20 })
+    .$type<FiscalOptionType>()
+    .notNull(),
+  label: varchar("label", { length: 150 }).notNull(),
+  groupName: varchar("group_name", { length: 100 }),
+  ivaRate: numeric("iva_rate", { precision: 4, scale: 2 }).notNull(),
+  ivaRateCode: varchar("iva_rate_code", { length: 2 }).notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+});
+
+
+
+
 
 export const products = pgTable("products", {
   productId: serial("product_id").primaryKey(),
@@ -34,6 +64,13 @@ export const products = pgTable("products", {
   categoryId: integer("category_id")
     .notNull()
     .references(() => categories.categoryId),
+    cabysCode:varchar("cabys_code",{length:13}),
+    ivaRateCode: varchar("iva_rate_code", { length: 2 })
+    .notNull()
+    .default("08"),
+  ivaRate: numeric("iva_rate", { precision: 4, scale: 2 })
+    .notNull()
+    .default("13.00"),
   isCustom: integer("is_custom").default(0),
   businessId: integer("business_id").notNull(),
 });
@@ -98,6 +135,10 @@ export const selectCategorySchema = createSelectSchema(categories);
 export const insertProductSchema = createInsertSchema(products);
 export const selectProductSchema = createSelectSchema(products);
 
+//neevo
+export const insertFiscalOptionSchema = createInsertSchema(fiscalOptions);
+export const selectFiscalOptionSchema = createSelectSchema(fiscalOptions);
+
 export const menuSearchQuerySchema = z.object({
   q: z.string().optional(),
   category: z.string().optional(),
@@ -110,7 +151,15 @@ const baseDishSchema = z.object({
   description: z.string().min(1, "La descripción es obligatoria"),
   price: z.coerce.number().positive("Ingresa un precio válido"),
   categoryId: z.coerce.number().int().positive("Selecciona una categoría"),
-  discount: z.coerce.number().min(0).optional(),
+ discount: z.coerce
+  .number()
+  .min(0, "El descuento no puede ser negativo")
+  .max(100, "El descuento no puede superar el 100 %")
+  .optional(),
+    cabysCode: z
+    .string()
+    .regex(/^\d{13}$/, "El CABYS debe tener 13 dígitos")
+    .optional(),
 });
 
 const optionGroupSchema = z.object({
@@ -123,6 +172,7 @@ const optionGroupSchema = z.object({
 export const createCategorySchema = z.object({
   name: z.string().min(1, "El nombre es obligatorio"),
   icon: z.string().min(1, "El ícono es obligatorio"),
+  fiscalType:z.enum(FISCAL_TYPES),
 });
 
 export const createProductSchema = baseDishSchema;

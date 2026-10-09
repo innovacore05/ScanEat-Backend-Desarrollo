@@ -3,6 +3,7 @@ import {
   confirmOrder,
   createOrder,
   deliverOrder,
+  quoteOrder,
   getOrders,
   getOrderStatus,
   markOrderReady,
@@ -26,5 +27,9 @@ router.get("/:id/status", getOrderStatus);
 router.patch("/:id/confirm", authenticate, requireRole(3), confirmOrder);
 router.patch("/:id/ready", authenticate,requireRole(2), markOrderReady);
 router.patch("/:id/deliver", authenticate, requireRole(3), deliverOrder);
+
+
+// Esta ruta solo calcula y devuelve los montos
+router.post("/quote", validateBody(createOrderSchema), quoteOrder);
 
 export default router;
