@@ -86,6 +86,47 @@ const buildLines = (rows: LineRow[]) =>
     };
   });
 
+type BuiltLine = ReturnType<typeof buildLines>[number];
+
+
+const toCents = (value: string | number) => Math.round(Number(value) * 100);
+
+// totales calculados con las mismas lineas, en centavos enteros
+const buildTotals = (lines: BuiltLine[]) => {
+  const totalNetSale = lines.reduce((sum, line) => sum + toCents(line.subtotal), 0);
+  const totalTax = lines.reduce((sum, line) => sum + toCents(line.tax), 0);
+  const totalDiscount = lines.reduce((sum, line) => sum + toCents(line.discount), 0);
+
+  return {
+    totalSale: ((totalNetSale + totalTax) / 100).toFixed(2),
+    totalDiscount: (totalDiscount / 100).toFixed(2),
+    totalNetSale: (totalNetSale / 100).toFixed(2),
+    totalTax: (totalTax / 100).toFixed(2),
+    serviceCharge: "0.00",
+    totalOtherCharges: "0.00",
+    totalVoucher: "0.00",
+  };
+};
+
+// desglose de IVA agrupado por tarifa, calculado con las mismas lineas
+const buildTaxSummary = (lines: BuiltLine[]) => {
+  const byRate = new Map<number, number>();
+
+  for (const line of lines) {
+    const rate = Number(line.ivaRate);
+
+    byRate.set(rate, (byRate.get(rate) ?? 0) + toCents(line.tax));
+  }
+
+  return [...byRate.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([rate, cents]) => ({
+      rate,
+      amount: (cents / 100).toFixed(2),
+    }));
+};
+
+
 export const getPaymentPreview = async (
   req: AuthRequest, 
   res: Response,) => {
@@ -155,24 +196,12 @@ export const getPaymentPreview = async (
 
     const lines = buildLines(rows);
 
-    const totalDiscount = lines.reduce(
-      (sum, line) => sum + Number(line.discount),
-      0,
-    );
-
-    return res.status(200).json({
+     return res.status(200).json({
       orderId: firstRow.order.orderId,
       tableNumber: firstRow.table.tableNumber,
       lines,
-      totals: {
-        totalSale: firstRow.order.total,
-        totalDiscount: totalDiscount.toFixed(2),
-        totalNetSale: firstRow.order.subtotal,
-        totalTax: firstRow.order.tax,
-        serviceCharge: "0.00",
-        totalOtherCharges: "0.00",
-        totalVoucher: "0.00",
-      },
+      totals: buildTotals(lines),
+      taxSummary: buildTaxSummary(lines),
       missingCabys: [],
     });
 
@@ -248,7 +277,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
       }
 
       const { order, table } = rows[0];
-      const total = Number(order.total);
+     
 
 //cabys:valida los datos fiscales antes de marar pagado
   const missingFiscalLine = findMissingFiscalLine(rows);
@@ -267,6 +296,13 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
       ) {
         return { type: "not-payable" as const };
       }
+
+ // lineas y totales salen de la misma fuente, y de aqui sale TODO
+      const lines = buildLines(rows);
+      const totals = buildTotals(lines);
+      const taxSummary = buildTaxSummary(lines);
+      const total = Number(totals.totalSale);
+
       // se valida ANTES de marcar la orden como pagada
       if (payload.method === "cash" && payload.amountTendered < total) {
         return { type: "insufficient" as const };
@@ -291,22 +327,16 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         return { type: "not-payable" as const };
       }
 
-      const lines = buildLines(rows);
-      const totalDiscount = lines.reduce(
-        (sum, line) => sum + Number(line.discount),
-        0,
-      );
-
-      const [receipt] = await tx
+    const [receipt] = await tx
         .insert(receipts)
         .values({
           businessId,
           orderId,
           documentType: "04", 
-          totalSale: order.total,
-          totalDiscount: totalDiscount.toFixed(2),
-          totalNetSale: order.subtotal,
-          totalTax: order.tax,
+          totalSale: totals.totalSale,
+          totalDiscount: totals.totalDiscount,
+          totalNetSale: totals.totalNetSale,
+          totalTax: totals.totalTax,
           cashierId,
         })
         .returning();
@@ -358,7 +388,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         receiptId: receipt.receiptId,
         method: METHOD_CODES[payload.method],
         reference: payload.method === "cash" ? null : payload.reference,
-        amount: order.total,
+               amount: totals.totalSale,
         amountTendered:
           payload.method === "cash" ? payload.amountTendered.toFixed(2) : null,
         changeGiven: change === null ? null : change.toFixed(2),
@@ -369,9 +399,9 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         type: "paid" as const,
         receipt,
         table,
-        order,
         lines,
-        totalDiscount,
+        totals,
+        taxSummary,
         change,
       };
     });
@@ -401,7 +431,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    const { receipt, table, order, lines, totalDiscount, change } = result;
+   const { receipt, table, lines, totals, taxSummary, change } = result;
 
     return res.status(201).json({
       receiptId: receipt.receiptId,
@@ -411,19 +441,12 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
       issueDate: receipt.issueDate,
       haciendaStatus: receipt.haciendaStatus,
       lines,
-      totals: {
-        totalSale: order.total,
-        totalDiscount: totalDiscount.toFixed(2),
-        totalNetSale: order.subtotal,
-        totalTax: order.tax,
-        serviceCharge: "0.00",
-        totalOtherCharges: "0.00",
-        totalVoucher: "0.00",
-      },
+      totals,
+      taxSummary,
       payment: {
         method: payload.method,
         reference: payload.method === "cash" ? null : payload.reference,
-        amount: order.total,
+        amount: totals.totalSale,
         amountTendered:
           payload.method === "cash" ? payload.amountTendered.toFixed(2) : null,
         change: change === null ? null : change.toFixed(2),
