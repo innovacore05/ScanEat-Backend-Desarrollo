@@ -218,28 +218,28 @@ export const quoteOrder = async (req: Request, res: Response) => {
       });
     }
 
-//  cotizar solo si la orden activa acepta productos
-const [activeOrder] = await db
-  .select({ state: orders.state })
-  .from(orders)
-  .where(
-    and(
-      eq(orders.tableId, parsed.tableId),
-      inArray(orders.state, [
-        orderStatuses.pending,
-        orderStatuses.inPreparation,
-        orderStatuses.ready,
-        orderStatuses.delivered,
-      ]),
-    ),
-  )
-  .limit(1);
+    //  cotizar solo si la orden activa acepta productos
+    const [activeOrder] = await db
+      .select({ state: orders.state })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.tableId, parsed.tableId),
+          inArray(orders.state, [
+            orderStatuses.pending,
+            orderStatuses.inPreparation,
+            orderStatuses.ready,
+            orderStatuses.delivered,
+          ]),
+        ),
+      )
+      .limit(1);
 
-if (activeOrder && activeOrder.state !== orderStatuses.pending) {
-  return res.status(409).json({
-    message: "La orden de esta mesa ya está siendo procesada",
-  });
-}
+    if (activeOrder && activeOrder.state !== orderStatuses.pending) {
+      return res.status(409).json({
+        message: "La orden de esta mesa ya está siendo procesada",
+      });
+    }
 
 
 
@@ -304,20 +304,20 @@ if (activeOrder && activeOrder.state !== orderStatuses.pending) {
       });
     }
 
-//no permitir que se coticen productos con descuentos fuera del rango permitido
+    //no permitir que se coticen productos con descuentos fuera del rango permitido
 
-const productWithInvalidDiscount = productRows.find(
-  (product: (typeof productRows)[number]) =>
-    !hasValidDiscount(product.discount),
-);
+    const productWithInvalidDiscount = productRows.find(
+      (product: (typeof productRows)[number]) =>
+        !hasValidDiscount(product.discount),
+    );
 
-if (productWithInvalidDiscount) {
-  return res.status(409).json({
-    message:
-      `El producto ${productWithInvalidDiscount.productId} tiene un descuento inválido. ` +
-      "Corrige el descuento antes de cotizar el pedido.",
-  });
-}
+    if (productWithInvalidDiscount) {
+      return res.status(409).json({
+        message:
+          `El producto ${productWithInvalidDiscount.productId} tiene un descuento inválido. ` +
+          "Corrige el descuento antes de cotizar el pedido.",
+      });
+    }
 
 
     const productData = new Map<number, ProductPricingData>(
@@ -334,7 +334,7 @@ if (productWithInvalidDiscount) {
       ]),
     );
 
-  
+
     const lines = calculateOrderLines(parsed.items, productData);
 
     const subtotal = roundCurrency(
@@ -345,13 +345,13 @@ if (productWithInvalidDiscount) {
     );
 
     const subtotalBeforeDiscount = roundCurrency(
-  lines.reduce(
-    (sum, line) =>
-      sum +
-      roundCurrency(Number(line.unitPrice) * line.quantity),
-    0,
-  ),
-);
+      lines.reduce(
+        (sum, line) =>
+          sum +
+          roundCurrency(Number(line.unitPrice) * line.quantity),
+        0,
+      ),
+    );
 
     const tax = roundCurrency(
       lines.reduce((sum, line) => sum + line.taxAmount, 0),
@@ -370,7 +370,7 @@ if (productWithInvalidDiscount) {
         total: roundCurrency(line.subtotal + line.taxAmount),
       })),
       totals: {
-        subtotalBeforeDiscount, 
+        subtotalBeforeDiscount,
         subtotal,
         discount,
         tax,
@@ -405,8 +405,10 @@ export const createOrder = async (req: Request, res: Response) => {
   try {
     const result = await db.transaction(async (tx) => {
       const [table] = await tx
-        .select({ id: tables.id, 
-          businessId: tables.businessId, })
+        .select({
+          id: tables.id,
+          businessId: tables.businessId,
+        })
         .from(tables)
         .where(and(
           eq(tables.id, parsed.tableId),
@@ -441,20 +443,20 @@ export const createOrder = async (req: Request, res: Response) => {
           ),
         );
 
-   
-     const productData = new Map<number, ProductPricingData>(
-  productRows.map((product) => [
-    product.productId,
-    {
-      price: Number(product.price),
-      discount: Number(product.discount ?? 0),
-      cabysCode: product.cabysCode!,
-      ivaRate:
-        product.ivaRate === null ? null : Number(product.ivaRate),
-      ivaRateCode: product.ivaRateCode,
-    },
-  ]),
-);
+
+      const productData = new Map<number, ProductPricingData>(
+        productRows.map((product) => [
+          product.productId,
+          {
+            price: Number(product.price),
+            discount: Number(product.discount ?? 0),
+            cabysCode: product.cabysCode!,
+            ivaRate:
+              product.ivaRate === null ? null : Number(product.ivaRate),
+            ivaRateCode: product.ivaRateCode,
+          },
+        ]),
+      );
 
       const missingProduct = parsed.items.find((item) =>
         !productData.has(item.productId),
@@ -465,7 +467,7 @@ export const createOrder = async (req: Request, res: Response) => {
           productId: missingProduct.productId
         };
       }
-//verificacion de negocio
+      //verificacion de negocio
       const wrongBusinessProduct = productRows.find(
         (product) => product.businessId !== table.businessId
       );
@@ -476,23 +478,23 @@ export const createOrder = async (req: Request, res: Response) => {
           productId: wrongBusinessProduct.productId,
         };
       }
-//cabys:el pedido no se puede crear si falta info fiscal
- const productMissingFiscalData = 
- productRows.find((product) => {
+      //cabys:el pedido no se puede crear si falta info fiscal
+      const productMissingFiscalData =
+        productRows.find((product) => {
 
-        const ivaRate =
-          product.ivaRate === null ? null : Number(product.ivaRate);
+          const ivaRate =
+            product.ivaRate === null ? null : Number(product.ivaRate);
 
-        return (
-          !product.cabysCode ||
-          !/^\d{13}$/.test(product.cabysCode) ||
-          !product.ivaRateCode ||
-          ivaRate === null ||
-          !Number.isFinite(ivaRate) ||
-          ivaRate <= 0 ||
-          ivaRate > 100
-        );
-      });
+          return (
+            !product.cabysCode ||
+            !/^\d{13}$/.test(product.cabysCode) ||
+            !product.ivaRateCode ||
+            ivaRate === null ||
+            !Number.isFinite(ivaRate) ||
+            ivaRate <= 0 ||
+            ivaRate > 100
+          );
+        });
 
       if (productMissingFiscalData) {
         return {
@@ -501,56 +503,56 @@ export const createOrder = async (req: Request, res: Response) => {
         };
       }
 
-//bloquear pedido si un producto tiene un descuento menor a 0% y mayor 100%
-const productWithInvalidDiscount = 
-productRows.find(
-  (product: (typeof productRows)[number]) =>
-    !hasValidDiscount(product.discount),
-);
+      //bloquear pedido si un producto tiene un descuento menor a 0% y mayor 100%
+      const productWithInvalidDiscount =
+        productRows.find(
+          (product: (typeof productRows)[number]) =>
+            !hasValidDiscount(product.discount),
+        );
 
-if (productWithInvalidDiscount) {
-  return {
-    type: "product-invalid-discount" as const,
-    productId: productWithInvalidDiscount.productId,
-  };
-}
+      if (productWithInvalidDiscount) {
+        return {
+          type: "product-invalid-discount" as const,
+          productId: productWithInvalidDiscount.productId,
+        };
+      }
 
 
       //detalle cliente:
-   // CAMBIO: createOrder usa el mismo cálculo que quoteOrder.
-const detailValues = calculateOrderLines(parsed.items, productData);
+      // CAMBIO: createOrder usa el mismo cálculo que quoteOrder.
+      const detailValues = calculateOrderLines(parsed.items, productData);
 
       //nuevo:la mesa tiene una orden activa?
 
-    const [activeOrder] = await tx
-  .select()
-  .from(orders)
-  .where(
-    and(
-      eq(orders.tableId, parsed.tableId),
-      inArray(orders.state, [
-        orderStatuses.pending,
-        orderStatuses.inPreparation,
-        orderStatuses.ready,
-        orderStatuses.delivered,
-      ]),
-    ),
-  )
-  .limit(1);
+      const [activeOrder] = await tx
+        .select()
+        .from(orders)
+        .where(
+          and(
+            eq(orders.tableId, parsed.tableId),
+            inArray(orders.state, [
+              orderStatuses.pending,
+              orderStatuses.inPreparation,
+              orderStatuses.ready,
+              orderStatuses.delivered,
+            ]),
+          ),
+        )
+        .limit(1);
 
-if (activeOrder) {
-  if (activeOrder.state !== orderStatuses.pending) {
-    return {
-      type: "order-already-processing" as const,
-      order: activeOrder,
-    };
-  }
+      if (activeOrder) {
+        if (activeOrder.state !== orderStatuses.pending) {
+          return {
+            type: "order-already-processing" as const,
+            order: activeOrder,
+          };
+        }
 
 
- const addedSubtotal = roundCurrency(
+        const addedSubtotal = roundCurrency(
           detailValues.reduce((sum, detail) => sum + detail.subtotal, 0),
         );
-         const addedTax = roundCurrency(
+        const addedTax = roundCurrency(
           detailValues.reduce((sum, detail) => sum + detail.taxAmount, 0),
         );
 
@@ -568,10 +570,10 @@ if (activeOrder) {
         // );
         // //sumar los nuevos montos agregados
         // const currentSubtotal = Number(activeOrder.subtotal);
-    
+
 
         //cambiar a futuro tomando en cuenta hacienda
-      const newTax = roundCurrency(Number(activeOrder.tax) + addedTax);
+        const newTax = roundCurrency(Number(activeOrder.tax) + addedTax);
         const newTotal = roundCurrency(newSubtotal + newTax);
 
 
@@ -622,10 +624,10 @@ if (activeOrder) {
       const subtotal = roundCurrency(
         detailValues.reduce(
           (sum, detail) => sum + detail.subtotal,
-          0, ), 
-        );
+          0,),
+      );
 
-        const tax = roundCurrency(
+      const tax = roundCurrency(
         detailValues.reduce((sum, detail) => sum + detail.taxAmount, 0),
       );
 
@@ -646,8 +648,8 @@ if (activeOrder) {
         .returning();
 
       // Guardar los productos de la nueva orden
-      await tx.insert(orderDetails).values(   
-           detailValues.map((detail) => ({
+      await tx.insert(orderDetails).values(
+        detailValues.map((detail) => ({
           orderId: order.orderId,
           productId: detail.productId,
           quantity: detail.quantity,
@@ -687,21 +689,21 @@ if (activeOrder) {
       });
     }
 
-//cabys:informar queproducto necesita cabys/iva
-  if (result.type === "product-missing-fiscal") {
+    //cabys:informar queproducto necesita cabys/iva
+    if (result.type === "product-missing-fiscal") {
       return res.status(409).json({
         message:
           `El producto ${result.productId} no tiene CABYS e IVA configurados. Revisa el producto antes de crear el pedido.`,
       });
     }
 
-if (result.type === "product-invalid-discount") {
-  return res.status(409).json({
-    message:
-      `El producto ${result.productId} tiene un descuento inválido. ` +
-      "Corrige el descuento antes de crear el pedido.",
-  });
-}
+    if (result.type === "product-invalid-discount") {
+      return res.status(409).json({
+        message:
+          `El producto ${result.productId} tiene un descuento inválido. ` +
+          "Corrige el descuento antes de crear el pedido.",
+      });
+    }
 
     if (result.type === "order-already-processing") {
       return res.status(409).json({
@@ -1018,7 +1020,8 @@ export const buildSalesAnalytics = async (
     cancelledSummary?.cancelledOrders ?? 0,
   );
 
-  const [bestProduct] = await db
+
+  const topProducts = await db
     .select({
       productId: products.productId,
       productName: products.productName,
@@ -1050,10 +1053,11 @@ export const buildSalesAnalytics = async (
       products.productId,
       products.productName,
     )
-    .orderBy(
-      desc(sum(orderDetails.quantity)),
-    )
-    .limit(1);
+    .orderBy(desc(sum(orderDetails.quantity)))
+    .limit(3);
+
+  const bestProduct = topProducts[0] ?? null;
+
 
   const peakHours = await db
     .select({
@@ -1210,6 +1214,14 @@ export const buildSalesAnalytics = async (
       }
       : null,
 
+
+    topProducts: topProducts.map((product) => ({
+      productId: product.productId,
+      name: product.productName,
+      quantity: Number(product.quantity ?? 0),
+    })),
+
+
     peakHours: peakHours.map((item) => ({
       hour: Number(item.hour),
       orders: Number(item.orders),
@@ -1251,7 +1263,7 @@ export const getSalesAnalytics = async (
     if (
       period !== "today" &&
       period !== "week" &&
-      period !== "month"&&
+      period !== "month" &&
       period !== "year"
     ) {
       return res.status(400).json({

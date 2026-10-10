@@ -195,12 +195,7 @@ export const updateBusinessSchema = z.object({
         .email("Formato de correo electrónico inválido"),
 
     number: z.string()
-        .min(8, "El número de teléfono no es válido"),
-
-    code: z.string()
-        .trim()
-        .min(1, "El código del negocio es requerido")
-        .transform((value) => value.toUpperCase()),
+        .min(8, "El número de teléfono no es válido")
 });
 
 
