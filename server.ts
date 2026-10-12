@@ -14,6 +14,7 @@ import businessRoutes from "./src/routes/businessRoutes";
 import themeRoutes from "./src/routes/themeRoutes";
 import publicThemeRoutes from "./src/routes/publicThemeRoutes";
 import billingRoutes from "./src/routes/billingRoutes";
+import aiRoutes from "./src/routes/aiRoutes";
 import multer from "multer";
 
 app.use('/api/auth', authRoutes);
@@ -26,6 +27,7 @@ app.use('/api/businesses', businessRoutes);
 app.use("/api/businesses", themeRoutes);
 app.use("/api/public", publicThemeRoutes);
 app.use("/api/billing", billingRoutes);
+app.use("/api/ai", aiRoutes);
 
 app.use('/api', (req, res) =>{
     res.status(404).json({ message: 'Endpoint not found' });
