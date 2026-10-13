@@ -1,6 +1,17 @@
 import { Request, Response } from "express";
 import { AuthRequest } from "../middleware/authenticate";
-import { and, desc, eq, inArray,isNull } from "drizzle-orm";
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  sql,
+  sum,
+} from "drizzle-orm";
 import { db } from "../db/connection";
 import {
   modifierGroups,
@@ -14,12 +25,63 @@ import {
   orderDetails,
   orders,
   orderStatusSchema,
+  type CreateOrderInput
 } from "../db/schemas/orderSchema";
 
-const TAX_RATE = 0.13;
+
 
 const roundCurrency = (value: number) =>
   Math.round((value + Number.EPSILON) * 100) / 100;
+
+//validar descuentos antuos o guardados que no sean del formulario
+const hasValidDiscount = (value: unknown): boolean => {
+  const discount = Number(value ?? 0);
+
+  return (
+    Number.isFinite(discount) &&
+    discount >= 0 &&
+    discount <= 100
+  );
+};
+
+//nuevo:calcula la linea una vez para cotizar y crear la orden
+type ProductPricingData = {
+  price: number;
+  discount: number;
+  cabysCode: string;
+  ivaRate: number | null;
+  ivaRateCode: string;
+};
+
+const calculateOrderLines = (
+  items: CreateOrderInput["items"],
+  productData: Map<number, ProductPricingData>,
+) =>
+  items.map((item) => {
+    const product = productData.get(item.productId)!;
+    const ivaRate = product.ivaRate!;
+
+    const gross = roundCurrency(product.price * item.quantity);
+    const discountAmount = roundCurrency(
+      gross * (product.discount / 100),
+    );
+    const subtotal = roundCurrency(gross - discountAmount);
+    const taxAmount = roundCurrency(subtotal * (ivaRate / 100));
+
+    return {
+      productId: item.productId,
+      quantity: item.quantity,
+      unitPrice: product.price.toFixed(2),
+      discountAmount: discountAmount.toFixed(2),
+      subtotal,
+      taxAmount,
+      cabysCode: product.cabysCode,
+      ivaRate: ivaRate.toFixed(2),
+      ivaRateCode: product.ivaRateCode,
+      selectedOptions: item.selectedOptions,
+    };
+  });
+
 
 const normalizeOrderState = (value?: string) => {
   if (!value) return undefined;
@@ -121,14 +183,232 @@ const transitionOrderState = async (
   }
 };
 
+//nuevo:consulta la mesa y los productos pero no realzia ningu anmodificacion ocrea ordenes
+//POST /orders/quote calcula el resumen sin guardar el pedido
+export const quoteOrder = async (req: Request, res: Response) => {
+  const parsedBody = createOrderSchema.safeParse(req.body);
+
+  if (!parsedBody.success) {
+    return res.status(400).json({
+      message: "Los datos del pedido no son válidos",
+      errors: parsedBody.error.flatten(),
+    });
+  }
+
+  const parsed = parsedBody.data;
+
+  try {
+    const [table] = await db
+      .select({
+        id: tables.id,
+        businessId: tables.businessId,
+      })
+      .from(tables)
+      .where(
+        and(
+          eq(tables.id, parsed.tableId),
+          eq(tables.active, true),
+        ),
+      )
+      .limit(1);
+
+    if (!table) {
+      return res.status(404).json({
+        message: "Mesa no encontrada o inactiva",
+      });
+    }
+
+    //  cotizar solo si la orden activa acepta productos
+    const [activeOrder] = await db
+      .select({ state: orders.state })
+      .from(orders)
+      .where(
+        and(
+          eq(orders.tableId, parsed.tableId),
+          inArray(orders.state, [
+            orderStatuses.pending,
+            orderStatuses.inPreparation,
+            orderStatuses.ready,
+            orderStatuses.delivered,
+          ]),
+        ),
+      )
+      .limit(1);
+
+    if (activeOrder && activeOrder.state !== orderStatuses.pending) {
+      return res.status(409).json({
+        message: "La orden de esta mesa ya está siendo procesada",
+      });
+    }
+
+
+
+    const productRows = await db
+      .select({
+        productId: products.productId,
+        price: products.price,
+        discount: products.discount,
+        businessId: products.businessId,
+        cabysCode: products.cabysCode,
+        ivaRate: products.ivaRate,
+        ivaRateCode: products.ivaRateCode,
+      })
+      .from(products)
+      .where(
+        inArray(
+          products.productId,
+          parsed.items.map((item) => item.productId),
+        ),
+      );
+
+    const missingProduct = parsed.items.find(
+      (item) =>
+        !productRows.some((product) => product.productId === item.productId),
+    );
+
+    if (missingProduct) {
+      return res.status(404).json({
+        message: `Producto no encontrado: ${missingProduct.productId}`,
+      });
+    }
+
+    const wrongBusinessProduct = productRows.find(
+      (product) => product.businessId !== table.businessId,
+    );
+
+    if (wrongBusinessProduct) {
+      return res.status(403).json({
+        message: "El producto no pertenece al negocio de la mesa",
+      });
+    }
+
+    const productMissingFiscalData = productRows.find((product) => {
+      const ivaRate =
+        product.ivaRate === null ? null : Number(product.ivaRate);
+
+      return (
+        !product.cabysCode ||
+        !/^\d{13}$/.test(product.cabysCode) ||
+        !product.ivaRateCode ||
+        ivaRate === null ||
+        !Number.isFinite(ivaRate) ||
+        ivaRate <= 0 ||
+        ivaRate > 100
+      );
+    });
+
+    if (productMissingFiscalData) {
+      return res.status(409).json({
+        message:
+          `El producto ${productMissingFiscalData.productId} no tiene CABYS e IVA configurados.`,
+      });
+    }
+
+    //no permitir que se coticen productos con descuentos fuera del rango permitido
+
+    const productWithInvalidDiscount = productRows.find(
+      (product: (typeof productRows)[number]) =>
+        !hasValidDiscount(product.discount),
+    );
+
+    if (productWithInvalidDiscount) {
+      return res.status(409).json({
+        message:
+          `El producto ${productWithInvalidDiscount.productId} tiene un descuento inválido. ` +
+          "Corrige el descuento antes de cotizar el pedido.",
+      });
+    }
+
+
+    const productData = new Map<number, ProductPricingData>(
+      productRows.map((product) => [
+        product.productId,
+        {
+          price: Number(product.price),
+          discount: Number(product.discount ?? 0),
+          cabysCode: product.cabysCode!,
+          ivaRate:
+            product.ivaRate === null ? null : Number(product.ivaRate),
+          ivaRateCode: product.ivaRateCode,
+        },
+      ]),
+    );
+
+
+    const lines = calculateOrderLines(parsed.items, productData);
+
+    const subtotal = roundCurrency(
+      lines.reduce((sum, line) => sum + line.subtotal, 0),
+    );
+    const discount = roundCurrency(
+      lines.reduce((sum, line) => sum + Number(line.discountAmount), 0),
+    );
+
+    const subtotalBeforeDiscount = roundCurrency(
+      lines.reduce(
+        (sum, line) =>
+          sum +
+          roundCurrency(Number(line.unitPrice) * line.quantity),
+        0,
+      ),
+    );
+
+    const tax = roundCurrency(
+      lines.reduce((sum, line) => sum + line.taxAmount, 0),
+    );
+    const total = roundCurrency(subtotal + tax);
+
+    return res.status(200).json({
+      lines: lines.map((line) => ({
+        productId: line.productId,
+        quantity: line.quantity,
+        unitPrice: Number(line.unitPrice),
+        discountAmount: Number(line.discountAmount),
+        subtotal: line.subtotal,
+        ivaRate: Number(line.ivaRate),
+        taxAmount: line.taxAmount,
+        total: roundCurrency(line.subtotal + line.taxAmount),
+      })),
+      totals: {
+        subtotalBeforeDiscount,
+        subtotal,
+        discount,
+        tax,
+        total,
+      },
+    });
+  } catch (error) {
+    console.error("Error cotizando el pedido:", error);
+
+    return res.status(500).json({
+      message: "No se pudo calcular el resumen del pedido",
+    });
+  }
+};
+
+//__________________________
+
 //Crear orden
 export const createOrder = async (req: Request, res: Response) => {
-  const parsed = createOrderSchema.parse(req.body);
+  //cabys:validacion de datos y error si el cuerpo no cumple
+  const parsedBody = createOrderSchema.safeParse(req.body);
+
+  if (!parsedBody.success) {
+    return res.status(400).json({
+      message: "Los datos del pedido no son válidos",
+      errors: parsedBody.error.flatten(),
+    });
+  }
+
+  const parsed = parsedBody.data;
 
   try {
     const result = await db.transaction(async (tx) => {
       const [table] = await tx
-        .select({ id: tables.id, businessId: tables.businessId, })
+        .select({
+          id: tables.id,
+          businessId: tables.businessId,
+        })
         .from(tables)
         .where(and(
           eq(tables.id, parsed.tableId),
@@ -140,13 +420,20 @@ export const createOrder = async (req: Request, res: Response) => {
       if (!table) {
         return { type: "table-not-found" as const };
       }
+
+
+
       //get precio
       const productRows = await tx
         .select({
           productId: products.productId,
           price: products.price,
           businessId: products.businessId,
-          discount:products.discount,
+          discount: products.discount,
+          //cabys:se pasa la informacion al pedido 
+          cabysCode: products.cabysCode,
+          ivaRate: products.ivaRate,
+          ivaRateCode: products.ivaRateCode,
         })
         .from(products)
         .where(
@@ -156,22 +443,20 @@ export const createOrder = async (req: Request, res: Response) => {
           ),
         );
 
-      // const prices = new Map
-      //   (productRows.map((product) =>
-      //     [product.productId,
-      //     Number(product.price),
-      //     ]),
-      //   );
-//nuevo:precio+decuento:
-const productData=new Map(
-  productRows.map((product)=>[
-    product.productId,
-    {
-      price:Number(product.price),
-      discount:Number(product.discount ?? 0),
-    },
-  ]),
-);
+
+      const productData = new Map<number, ProductPricingData>(
+        productRows.map((product) => [
+          product.productId,
+          {
+            price: Number(product.price),
+            discount: Number(product.discount ?? 0),
+            cabysCode: product.cabysCode!,
+            ivaRate:
+              product.ivaRate === null ? null : Number(product.ivaRate),
+            ivaRateCode: product.ivaRateCode,
+          },
+        ]),
+      );
 
       const missingProduct = parsed.items.find((item) =>
         !productData.has(item.productId),
@@ -181,8 +466,8 @@ const productData=new Map(
           type: "product-not-found" as const,
           productId: missingProduct.productId
         };
-      };
-
+      }
+      //verificacion de negocio
       const wrongBusinessProduct = productRows.find(
         (product) => product.businessId !== table.businessId
       );
@@ -193,37 +478,49 @@ const productData=new Map(
           productId: wrongBusinessProduct.productId,
         };
       }
+      //cabys:el pedido no se puede crear si falta info fiscal
+      const productMissingFiscalData =
+        productRows.find((product) => {
+
+          const ivaRate =
+            product.ivaRate === null ? null : Number(product.ivaRate);
+
+          return (
+            !product.cabysCode ||
+            !/^\d{13}$/.test(product.cabysCode) ||
+            !product.ivaRateCode ||
+            ivaRate === null ||
+            !Number.isFinite(ivaRate) ||
+            ivaRate <= 0 ||
+            ivaRate > 100
+          );
+        });
+
+      if (productMissingFiscalData) {
+        return {
+          type: "product-missing-fiscal" as const,
+          productId: productMissingFiscalData.productId,
+        };
+      }
+
+      //bloquear pedido si un producto tiene un descuento menor a 0% y mayor 100%
+      const productWithInvalidDiscount =
+        productRows.find(
+          (product: (typeof productRows)[number]) =>
+            !hasValidDiscount(product.discount),
+        );
+
+      if (productWithInvalidDiscount) {
+        return {
+          type: "product-invalid-discount" as const,
+          productId: productWithInvalidDiscount.productId,
+        };
+      }
+
 
       //detalle cliente:
-      const detailValues = parsed.items.map((item) => {
-        const product = productData.get(item.productId)!;
-        //nuevo
-        const unitPrice = product.price;
-  const discountPercent = product.discount;
-
-  const gross = roundCurrency(
-    unitPrice * item.quantity
-  );
-
-  const discountAmount = roundCurrency(
-    gross * (discountPercent / 100)
-  );
-
-  const subTotal = roundCurrency(
-    gross - discountAmount
-  );
-        
-
-        return {
-          productId: item.productId,
-          quantity: item.quantity,
-          unitPrice: unitPrice.toFixed(2),
-          discountAmount:discountAmount.toFixed(2),      
-          subtotal: subTotal,
-          selectedOptions: item.selectedOptions,
-        };
-      });
-
+      // CAMBIO: createOrder usa el mismo cálculo que quoteOrder.
+      const detailValues = calculateOrderLines(parsed.items, productData);
 
       //nuevo:la mesa tiene una orden activa?
 
@@ -233,21 +530,16 @@ const productData=new Map(
         .where(
           and(
             eq(orders.tableId, parsed.tableId),
-            inArray(orders.state,
-              [
-                orderStatuses.pending,
-                orderStatuses.inPreparation,
-                orderStatuses.ready,
-                 orderStatuses.delivered,
-              ]),
+            inArray(orders.state, [
+              orderStatuses.pending,
+              orderStatuses.inPreparation,
+              orderStatuses.ready,
+              orderStatuses.delivered,
+            ]),
           ),
         )
         .limit(1);
 
-      console.log("ACTIVE ORDER:", activeOrder);
-      //si la orden activa , y , si el estado de la orden 
-      //activa es no pendiente, entonces va a retornar que 
-      //la orden ya esta procesandose, y que laorden esta activa
       if (activeOrder) {
         if (activeOrder.state !== orderStatuses.pending) {
           return {
@@ -257,28 +549,33 @@ const productData=new Map(
         }
 
 
+        const addedSubtotal = roundCurrency(
+          detailValues.reduce((sum, detail) => sum + detail.subtotal, 0),
+        );
+        const addedTax = roundCurrency(
+          detailValues.reduce((sum, detail) => sum + detail.taxAmount, 0),
+        );
+
+        const newSubtotal = roundCurrency(
+          Number(activeOrder.subtotal) + addedSubtotal,
+        );
+
         //calculos de los productos agregados actuales y los que vienen
 
-        const newItemSubtotal = roundCurrency(
-          detailValues.reduce(
-            (sum, detail) => sum + detail.subtotal,
-            0,
-          ),
-        );
-        //sumar los nuevos montos agregados
-        const currentSubtotal = Number(activeOrder.subtotal);
-        const newSubtotal = roundCurrency(
-          currentSubtotal + newItemSubtotal,
-        );
+        // const newItemSubtotal = roundCurrency(
+        //   detailValues.reduce(
+        //     (sum, detail) => sum + detail.subtotal,
+        //     0,
+        //   ),
+        // );
+        // //sumar los nuevos montos agregados
+        // const currentSubtotal = Number(activeOrder.subtotal);
+
 
         //cambiar a futuro tomando en cuenta hacienda
-        const newTax = roundCurrency(
-          newSubtotal * TAX_RATE,
-        );
-        //recalculo del total
-        const newTotal = roundCurrency(
-          newSubtotal + newTax,
-        );
+        const newTax = roundCurrency(Number(activeOrder.tax) + addedTax);
+        const newTotal = roundCurrency(newSubtotal + newTax);
+
 
         //actaulzia rorder
         const [updateOrder] = await tx
@@ -299,15 +596,19 @@ const productData=new Map(
 
         await tx.insert(orderDetails).values(
           detailValues.map((detail) => ({
-           
+
             orderId: activeOrder.orderId,
             productId: detail.productId,
             quantity: detail.quantity,
             unitPrice: detail.unitPrice,
-            discountAmount:detail.discountAmount,
+            discountAmount: detail.discountAmount,
             subtotal: detail.subtotal.toFixed(2),
+            taxAmount: detail.taxAmount.toFixed(2),
+            cabysCode: detail.cabysCode,
+            ivaRate: detail.ivaRate,
+            ivaRateCode: detail.ivaRateCode,
             selectedOptions: detail.selectedOptions,
-             clientId: parsed.clientId ?? null,
+            clientId: parsed.clientId ?? null,
           })),
         );
 
@@ -323,11 +624,11 @@ const productData=new Map(
       const subtotal = roundCurrency(
         detailValues.reduce(
           (sum, detail) => sum + detail.subtotal,
-          0,
-        ),
+          0,),
       );
+
       const tax = roundCurrency(
-        subtotal * TAX_RATE,
+        detailValues.reduce((sum, detail) => sum + detail.taxAmount, 0),
       );
 
       const total = roundCurrency(
@@ -355,6 +656,10 @@ const productData=new Map(
           unitPrice: detail.unitPrice,
           discountAmount: detail.discountAmount,
           subtotal: detail.subtotal.toFixed(2),
+          taxAmount: detail.taxAmount.toFixed(2),
+          cabysCode: detail.cabysCode,
+          ivaRate: detail.ivaRate,
+          ivaRateCode: detail.ivaRateCode,
           selectedOptions: detail.selectedOptions,
           clientId: parsed.clientId ?? null,
         })),
@@ -384,6 +689,21 @@ const productData=new Map(
       });
     }
 
+    //cabys:informar queproducto necesita cabys/iva
+    if (result.type === "product-missing-fiscal") {
+      return res.status(409).json({
+        message:
+          `El producto ${result.productId} no tiene CABYS e IVA configurados. Revisa el producto antes de crear el pedido.`,
+      });
+    }
+
+    if (result.type === "product-invalid-discount") {
+      return res.status(409).json({
+        message:
+          `El producto ${result.productId} tiene un descuento inválido. ` +
+          "Corrige el descuento antes de crear el pedido.",
+      });
+    }
 
     if (result.type === "order-already-processing") {
       return res.status(409).json({
@@ -454,7 +774,7 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
 
     const stateParam = normalizeOrderState(stateValue);
 
-    const pendingPayment=req.query.pendingPayment==="true";
+    const pendingPayment = req.query.pendingPayment === "true";
 
     const query = db
       .select({
@@ -477,11 +797,11 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
       .leftJoin(modifierGroups, eq(products.productId, modifierGroups.productId))
       .leftJoin(modifierOptions, eq(modifierGroups.id, modifierOptions.groupId));
 
-const whereConditions=[
-  eq(tables.businessId,businessId),
-  ...(stateParam ? [eq(orders.state,stateParam)]:[]),
-  ...(pendingPayment ? [isNull(orders.paidAt)]:[]),
-];
+    const whereConditions = [
+      eq(tables.businessId, businessId),
+      ...(stateParam ? [eq(orders.state, stateParam)] : []),
+      ...(pendingPayment ? [isNull(orders.paidAt)] : []),
+    ];
 
 
     // const rows = stateParam
@@ -498,9 +818,9 @@ const whereConditions=[
     //     .orderBy(desc(orders.date), desc(orders.orderId));
 
     //nuevo
-    const rows =await query
-    .where(and(...whereConditions))
-    .orderBy(desc(orders.date),desc(orders.orderId));
+    const rows = await query
+      .where(and(...whereConditions))
+      .orderBy(desc(orders.date), desc(orders.orderId));
 
     const ordersById = new Map<number, {
       order: typeof rows[number]["order"];
@@ -590,6 +910,384 @@ const whereConditions=[
   }
 };
 
+//Esto es para obtener la analítica de ventas, y que se utiliza para generar el reporte de ventas con Gemini.
+export const buildSalesAnalytics = async (
+  businessId: number,
+  period: "today" | "week" | "month" | "year",
+) => {
+  const now = new Date();
+
+  let startDate: Date;
+  let endDate: Date;
+
+  if (period === "week") {
+    startDate = new Date(now);
+
+    const day = startDate.getDay();
+    const daysFromMonday = day === 0 ? 6 : day - 1;
+
+    startDate.setDate(startDate.getDate() - daysFromMonday);
+    startDate.setHours(0, 0, 0, 0);
+
+    endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 7);
+  } else if (period === "month") {
+    startDate = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      1,
+      0,
+      0,
+      0,
+      0,
+    );
+
+    endDate = new Date(
+      now.getFullYear(),
+      now.getMonth() + 1,
+      1,
+      0,
+      0,
+      0,
+      0,
+    );
+  } else if (period === "year") {
+    startDate = new Date(
+      now.getFullYear(),
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+    );
+
+    endDate = new Date(
+      now.getFullYear() + 1,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+    );
+  } else {
+    startDate = new Date(now);
+    startDate.setHours(0, 0, 0, 0);
+
+    endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 1);
+  }
+
+  const [salesSummary] = await db
+    .select({
+      totalSales: sum(orders.total),
+      totalOrders: count(orders.orderId),
+    })
+    .from(orders)
+    .innerJoin(tables, eq(orders.tableId, tables.id))
+    .where(
+      and(
+        eq(tables.businessId, businessId),
+        eq(orders.state, orderStatuses.paid),
+        gte(orders.paidAt, startDate),
+        lt(orders.paidAt, endDate),
+      ),
+    );
+
+  const totalSales = Number(salesSummary?.totalSales ?? 0);
+  const totalOrders = Number(salesSummary?.totalOrders ?? 0);
+
+  const averageOrder =
+    totalOrders > 0 ? totalSales / totalOrders : 0;
+
+  const [cancelledSummary] = await db
+    .select({
+      cancelledOrders: count(orders.orderId),
+    })
+    .from(orders)
+    .innerJoin(tables, eq(orders.tableId, tables.id))
+    .where(
+      and(
+        eq(tables.businessId, businessId),
+        eq(orders.state, orderStatuses.cancelled),
+        gte(orders.date, startDate),
+        lt(orders.date, endDate),
+      ),
+    );
+
+  const cancelledOrders = Number(
+    cancelledSummary?.cancelledOrders ?? 0,
+  );
+
+
+  const topProducts = await db
+    .select({
+      productId: products.productId,
+      productName: products.productName,
+      quantity: sum(orderDetails.quantity),
+    })
+    .from(orderDetails)
+    .innerJoin(
+      orders,
+      eq(orderDetails.orderId, orders.orderId),
+    )
+    .innerJoin(
+      tables,
+      eq(orders.tableId, tables.id),
+    )
+    .innerJoin(
+      products,
+      eq(orderDetails.productId, products.productId),
+    )
+    .where(
+      and(
+        eq(tables.businessId, businessId),
+        eq(products.businessId, businessId),
+        eq(orders.state, orderStatuses.paid),
+        gte(orders.paidAt, startDate),
+        lt(orders.paidAt, endDate),
+      ),
+    )
+    .groupBy(
+      products.productId,
+      products.productName,
+    )
+    .orderBy(desc(sum(orderDetails.quantity)))
+    .limit(3);
+
+  const bestProduct = topProducts[0] ?? null;
+
+
+  const peakHours = await db
+    .select({
+      hour: sql<number>`
+      EXTRACT(
+        HOUR FROM ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica'
+      )
+    `,
+      orders: count(orders.orderId),
+    })
+    .from(orders)
+    .innerJoin(
+      tables,
+      eq(orders.tableId, tables.id),
+    )
+    .where(
+      and(
+        eq(tables.businessId, businessId),
+        eq(orders.state, orderStatuses.paid),
+        gte(orders.paidAt, startDate),
+        lt(orders.paidAt, endDate),
+      ),
+    )
+    .groupBy(
+      sql`
+    EXTRACT(
+      HOUR FROM ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica'
+    )
+  `,
+    )
+    .orderBy(
+      desc(count(orders.orderId)),
+    );
+
+  const salesByPeriod = await db
+    .select({
+      label:
+        period === "today"
+          ? sql<string>`
+        TO_CHAR(
+          ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+          'HH24:00'
+        )
+      `
+          : period === "year"
+            ? sql<string>`
+          TO_CHAR(
+            ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+            'YYYY-MM'
+          )
+        `
+            : sql<string>`
+          TO_CHAR(
+            ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+            'YYYY-MM-DD'
+          )
+        `,
+      sales: sum(orders.total),
+    })
+    .from(orders)
+    .innerJoin(
+      tables,
+      eq(orders.tableId, tables.id),
+    )
+    .where(
+      and(
+        eq(tables.businessId, businessId),
+        eq(orders.state, orderStatuses.paid),
+        gte(orders.paidAt, startDate),
+        lt(orders.paidAt, endDate),
+      ),
+    )
+    .groupBy(
+      period === "today"
+        ? sql`
+        TO_CHAR(
+          ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+          'HH24:00'
+        )
+      `
+        : period === "year"
+          ? sql`
+          TO_CHAR(
+            ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+            'YYYY-MM'
+          )
+        `
+          : sql`
+          TO_CHAR(
+            ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+            'YYYY-MM-DD'
+          )
+        `,
+    )
+    .orderBy(
+      period === "today"
+        ? sql`
+        TO_CHAR(
+          ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+          'HH24:00'
+        )
+      `
+        : period === "year"
+          ? sql`
+          TO_CHAR(
+            ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+            'YYYY-MM'
+          )
+        `
+          : sql`
+          TO_CHAR(
+            ${orders.paidAt} AT TIME ZONE 'America/Costa_Rica',
+            'YYYY-MM-DD'
+          )
+        `,
+    );
+
+  const totalProcessedOrders =
+    totalOrders + cancelledOrders;
+
+  const cancellationRate =
+    totalProcessedOrders > 0
+      ? (cancelledOrders / totalProcessedOrders) * 100
+      : 0;
+
+  return {
+    period,
+
+    dateRange: {
+      start: startDate,
+      end: endDate,
+    },
+
+    summary: {
+      totalSales: Number(totalSales.toFixed(2)),
+      totalOrders,
+      averageOrder: Number(
+        averageOrder.toFixed(2),
+      ),
+    },
+
+    salesByPeriod: salesByPeriod.map((item) => ({
+      label: item.label,
+      sales: Number(item.sales ?? 0),
+    })),
+
+    bestProduct: bestProduct
+      ? {
+        productId: bestProduct.productId,
+        name: bestProduct.productName,
+        quantity: Number(
+          bestProduct.quantity ?? 0,
+        ),
+      }
+      : null,
+
+
+    topProducts: topProducts.map((product) => ({
+      productId: product.productId,
+      name: product.productName,
+      quantity: Number(product.quantity ?? 0),
+    })),
+
+
+    peakHours: peakHours.map((item) => ({
+      hour: Number(item.hour),
+      orders: Number(item.orders),
+    })),
+
+
+
+    cancellations: {
+      total: cancelledOrders,
+      rate: Number(
+        cancellationRate.toFixed(2),
+      ),
+    },
+  };
+};
+
+
+//Este es el controlador para obtener la analítica de ventas, que se utiliza para generar el reporte de ventas con Gemini.
+export const getSalesAnalytics = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
+
+    const rawPeriod = req.query.period;
+
+    const period =
+      typeof rawPeriod === "string"
+        ? rawPeriod.toLowerCase()
+        : "today";
+
+    if (
+      period !== "today" &&
+      period !== "week" &&
+      period !== "month" &&
+      period !== "year"
+    ) {
+      return res.status(400).json({
+        message: "Periodo no válido",
+      });
+    }
+
+    const analytics = await buildSalesAnalytics(
+      businessId,
+      period,
+    );
+
+    return res.status(200).json(analytics);
+  } catch (error) {
+    console.error(
+      "Error obteniendo analítica de ventas:",
+      error,
+    );
+
+    return res.status(500).json({
+      message: "No se pudo obtener la analítica de ventas",
+    });
+  }
+};
 
 //obtener el estado de la order
 export const getOrderStatus = async (req: Request, res: Response) => {
@@ -603,14 +1301,14 @@ export const getOrderStatus = async (req: Request, res: Response) => {
     }
 
     const [order] = await db
-  .select({
-    orderId: orders.orderId,
-    state: orders.state,
-  })
-  .from(orders)
-  .innerJoin(tables, eq(orders.tableId, tables.id))
-  .where(eq(orders.orderId, orderId))
-  .limit(1);
+      .select({
+        orderId: orders.orderId,
+        state: orders.state,
+      })
+      .from(orders)
+      .innerJoin(tables, eq(orders.tableId, tables.id))
+      .where(eq(orders.orderId, orderId))
+      .limit(1);
 
     if (!order) {
       return res.status(404).json({
@@ -694,3 +1392,4 @@ export const getActiveOrder = async (req: Request, res: Response) => {
     });
   }
 };
+

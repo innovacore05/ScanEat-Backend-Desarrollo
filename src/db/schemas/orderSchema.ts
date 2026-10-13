@@ -45,6 +45,12 @@ export const orderDetails = pgTable("order_details", {
   quantity: integer("quantity").notNull(),
   clientId: uuid("client_id"),
   unitPrice: numeric("unit_price", { precision: 10, scale: 2 }).notNull(),
+  //cabys:copia del producto al momento de ordenar
+    cabysCode: varchar("cabys_code", { length: 13 }),
+  ivaRate: numeric("iva_rate", { precision: 4, scale: 2 }),
+  ivaRateCode: varchar("iva_rate_code", { length: 2 }),
+  taxAmount: numeric("tax_amount", { precision: 10, scale: 2 }),
+  
   //nuevo
   discountAmount: numeric("discount_amount", {
     precision: 10,
