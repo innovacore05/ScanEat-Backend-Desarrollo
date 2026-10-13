@@ -37,13 +37,25 @@ export const invoicingConfig=pgTable("invoicing_config",{
     email:varchar("email",{length:255}),
     phone:varchar("phone",{length:30}),
     address:text("address"),
+
+// --- NUEVOS CAMPOS PARA HACIENDA ---
+  province: varchar("province", { length: 2 }),
+  canton: varchar("canton", { length: 2 }),
+  district: varchar("district", { length: 2 }),
+  neighborhood: varchar("neighborhood", { length: 2 }),
+  
+  environment: varchar("environment", { length: 15 }).notNull().default("sandbox"),
+  //la informacion del p12, se pasa en base 64 porque se pasa de datos bianrios a texto 
+  certificateBase64: text("certificate_base64"), 
+  certificatePassword: text("certificate_password"),
+  tribuUser: text("tribu_user"),
+  tribuPassword: text("tribu_password"),
+  
     createdAt:timestamptz("created_at").notNull().defaultNow(),
     updatedAt:timestamptz("updated_at").notNull().defaultNow()
 }); 
 
-
 //datos del supertipo en la bd que guarda todos los campos de los tipos de documentos
-
 export const receipts=pgTable("receipts",{
     receiptId:serial("receipt_id").primaryKey(),
     businessId:integer("business_id").notNull()
