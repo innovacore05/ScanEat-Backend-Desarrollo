@@ -49,7 +49,7 @@
 // }
 
 // Esto de aca NO BORRAR, es parael hosting , actualizacion
-
+//actualziacion para ver qsi mejora 
 const BREVO_API_URL = 'https://api.brevo.com/v3/smtp/email';
 
 console.log('[BREVO CONFIG]', {
