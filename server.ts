@@ -16,6 +16,7 @@ import publicThemeRoutes from "./src/routes/publicThemeRoutes";
 import billingRoutes from "./src/routes/billingRoutes";
 import aiRoutes from "./src/routes/aiRoutes";
 import multer from "multer";
+import issuerRoutes from "./src/routes/issuerRoutes";
 
 app.use('/api/auth', authRoutes);
 app.use("/api/menu",menuRoutes);
@@ -28,6 +29,8 @@ app.use("/api/businesses", themeRoutes);
 app.use("/api/public", publicThemeRoutes);
 app.use("/api/billing", billingRoutes);
 app.use("/api/ai", aiRoutes);
+app.use("/api/issuer", issuerRoutes);
+
 
 app.use('/api', (req, res) =>{
     res.status(404).json({ message: 'Endpoint not found' });
@@ -37,6 +40,14 @@ app.use('/api', (req, res) =>{
 //rutas, archivos del server,etc
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
   console.error(err.message);
+
+  if (err instanceof multer.MulterError && req.originalUrl.startsWith("/api/issuer")) {
+    return res.status(400).json({
+      message: "El certificado .p12 no puede superar los 64 KB",
+    });
+  }
+
+
 
   if (err instanceof multer.MulterError) {
     if (err.code === "LIMIT_FILE_SIZE") {

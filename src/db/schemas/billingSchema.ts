@@ -12,8 +12,7 @@ type AnyPgColumn,
 
 import { businesses,users } from "./userSchema";
 import { orderDetails,orders } from "./orderSchema";
-import { email } from "zod";
-
+import {z} from "zod";
 
 
 const money =(name:string)=>numeric(name,{
@@ -23,23 +22,38 @@ const timestamptz=(name:string)=>timestamp(name,{withTimezone:true});
 
 
 //datos fiscales del emisor
-export const invoicingConfig=pgTable("invoicing_config",{
-    configId:serial("config_id").primaryKey(),
-    businessId:integer("business_id")
+export const invoicingConfig = pgTable("invoicing_config", {
+  configId: serial("config_id").primaryKey(),
+  businessId: integer("business_id")
     .notNull()
     .unique()
-    .references(()=>businesses.business_id,{onDelete:"cascade"}),
-    legalId:varchar("legal_id",{length:20}).notNull(),
-    legalIdType:varchar("legal_id_type",{length:2}).notNull(),
-    legalName:varchar("legal_name",{length:255}),
-    tradeName:varchar("trade_name",{length:255}),
-    activityCode:varchar("activity_code",{length:10}),
-    email:varchar("email",{length:255}),
-    phone:varchar("phone",{length:30}),
-    address:text("address"),
-    createdAt:timestamptz("created_at").notNull().defaultNow(),
-    updatedAt:timestamptz("updated_at").notNull().defaultNow()
-}); 
+    .references(() => businesses.business_id, { onDelete: "cascade" }),
+  legalId: varchar("legal_id", { length: 20 }).notNull(),
+  legalIdType: varchar("legal_id_type", { length: 2 }).notNull(),
+  legalName: varchar("legal_name", { length: 255 }).notNull(),
+  tradeName: varchar("trade_name", { length: 255 }),
+  activityCode: varchar("activity_code", { length: 10 }),
+  email: varchar("email", { length: 255 }),
+  phone: varchar("phone", { length: 30 }),
+  address: text("address"),
+
+  // ubicación
+  province: varchar("province", { length: 2 }),
+  canton: varchar("canton", { length: 2 }),
+  district: varchar("district", { length: 2 }),
+  neighborhood: varchar("neighborhood", { length: 50 }),
+
+  environment: varchar("environment", { length: 15 })
+    .notNull()
+    .default("sandbox"),
+
+    
+  // fecha en que se subio el certificado a Factura en CR
+  certificateUploadedAt: timestamptz("certificate_uploaded_at"),
+
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+  updatedAt: timestamptz("updated_at").notNull().defaultNow(),
+});
 
 
 //datos del supertipo en la bd que guarda todos los campos de los tipos de documentos
@@ -77,6 +91,37 @@ cashierId:integer("cashier_id").notNull().references(()=>users.user_id),
 createdAt:timestamptz("created_at").notNull().defaultNow(),
 
 });
+
+
+
+
+export const issuerSchema = z.object({
+  legalIdType: z
+    .string()
+    .regex(/^0[1-4]$/, "Seleccioná el tipo de identificación"),
+  legalId: z
+    .string()
+    .regex(/^[0-9A-Za-z]{9,12}$/, "La cédula debe tener entre 9 y 12 caracteres, sin guiones"),
+  legalName: z.string().trim().min(1, "Falta el nombre o razón social").max(255),
+  tradeName: z.string().trim().min(1, "Falta el nombre comercial").max(255),
+  activityCode: z
+    .string()
+    .trim()
+    .regex(/^\d{4,6}(\.\d)?$/, "Actividad económica inválida (ej: 561001 o 5610.0)"),
+  email: z.string().trim().email("Correo inválido").max(255),
+  phone: z.string().regex(/^\d{8}$/, "El teléfono debe tener 8 dígitos"),
+  province: z.string().regex(/^[1-7]$/, "La provincia debe ser un número del 1 al 7"),
+  canton: z.string().regex(/^\d{2}$/, "El cantón debe tener 2 dígitos (ej: 01)"),
+  district: z.string().regex(/^\d{2}$/, "El distrito debe tener 2 dígitos (ej: 01)"),
+  neighborhood: z.string().trim().max(50, "El barrio es muy largo").optional().default(""),
+  address: z
+    .string()
+    .trim()
+    .min(5, "La dirección exacta debe tener al menos 5 caracteres")
+    .max(250),
+  environment: z.string().regex(/^(sandbox|production)$/, "Ambiente inválido"),
+});
+
 
 
 //_
