@@ -153,3 +153,96 @@ export const uploadCertificate = async (req: AuthRequest, res: Response) => {
     res.status(500).json({ message: "No se pudo subir el certificado" });
   }
 };
+
+
+//lookupTaxpayer para consultar al contribuyente en hacienda
+const LEGAL_ID_REGEX = /^[0-9A-Za-z]{9,12}$/;
+
+// Hacienda asigna esta actividad por defecto a una sociedad sin actividad comercial
+const GENERIC_ACTIVITY = /legalmente constituid/i;
+
+type TaxpayerResponse = {
+  encontrado?: boolean;
+  contribuyente?: boolean | null;
+  nombre?: string;
+  nombreComercial?: string;
+  tipoIdentificacion?: string;
+  puedeEmitir?: boolean;
+  regimen?: { clave?: string; simplificado?: boolean; trasladaIva?: boolean };
+  actividades?: Array<{
+    codigo?: string;
+    descripcion?: string;
+    estado?: string;
+    tipo?: string;
+  }>;
+};
+
+// consulta de la cedula contra el registro de Hacienda (via Factura en CR)
+export const lookupTaxpayer = async (req: AuthRequest, res: Response) => {
+  try {
+    const legalId = String(req.params.legalId ?? "").trim();
+    if (!LEGAL_ID_REGEX.test(legalId)) {
+      return res.status(400).json({
+        message: "La cédula debe tener entre 9 y 12 caracteres, sin guiones",
+      });
+    }
+
+    const response = await fetch(
+      `https://api.facturaencr.com/v2/efactura/contribuyentes/${encodeURIComponent(legalId)}`,
+      {
+        headers: {
+          "X-API-Key": process.env.FACTURAENCR_API_KEY!,
+          "X-API-Secret": process.env.FACTURAENCR_API_SECRET!,
+          Accept: "application/json",
+        },
+      },
+    );
+
+    if (response.status === 503) {
+      return res.status(503).json({
+        message: "Hacienda no respondió. Podés completar los datos a mano.",
+      });
+    }
+    if (!response.ok) {
+      return res.status(response.status >= 500 ? 502 : 400).json({
+        message: "No se pudo consultar la cédula",
+      });
+    }
+
+    const data = (await response.json()) as TaxpayerResponse;
+
+    if (data.encontrado === false) {
+      return res
+        .status(404)
+        .json({ message: "No se encontró esa cédula en Hacienda" });
+    }
+
+    const activities = (data.actividades ?? [])
+      .filter((a) => a.codigo && (!a.estado || a.estado === "A"))
+      // la principal (tipo "P") primero
+      .sort((a, b) => (a.tipo === "P" ? -1 : 0) - (b.tipo === "P" ? -1 : 0))
+      .map((a) => ({
+        code: String(a.codigo).trim(),
+        description: String(a.descripcion ?? "").trim(),
+      }))
+      .filter((a) => !GENERIC_ACTIVITY.test(a.description));
+
+    // por si Hacienda no manda el tipo: 9 = física, 10 = jurídica, 11-12 = DIMEX
+    const fallbackType =
+      legalId.length === 9 ? "01" : legalId.length === 10 ? "02" : "03";
+
+    res.json({
+      legalName: data.nombre?.trim() || null,
+      tradeName: data.nombreComercial?.trim() || null,
+      registered: data.contribuyente ?? null,
+      legalIdType: data.tipoIdentificacion ?? fallbackType,
+      canIssue: data.puedeEmitir ?? null,
+      chargesVat: data.regimen?.trasladaIva ?? null,
+      hasCommercialActivity: activities.length > 0,
+      activities,
+    });
+  } catch (error) {
+    console.error("Error consultando contribuyente:", error);
+    res.status(500).json({ message: "No se pudo consultar la cédula" });
+  }
+};

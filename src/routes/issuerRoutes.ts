@@ -5,6 +5,7 @@ import {
   getIssuer,
   saveIssuer,
   uploadCertificate,
+  lookupTaxpayer,
 } from "../controllers/issuerController";
 
 const router = Router();
@@ -17,12 +18,10 @@ const uploadP12 = multer({
 
 router.get("/", authenticate, requireRole(1), getIssuer);
 router.put("/", authenticate, requireRole(1), saveIssuer);
-router.post(
-  "/certificate",
-  authenticate,
-  requireRole(1),
-  uploadP12.single("p12"),
-  uploadCertificate,
-);
+router.post( "/certificate",authenticate,requireRole(1),uploadP12.single("p12"),uploadCertificate,);
+
+//para consultar contribuyente
+router.get("/lookup/:legalId", authenticate, requireRole(1), lookupTaxpayer);
 
 export default router;
+
