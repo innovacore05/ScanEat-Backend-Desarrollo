@@ -7,9 +7,11 @@ import {
   getOrders,
   getOrderStatus,
   markOrderReady,
+  markKitchenOrderReady,
   getActiveOrder,
   getSalesAnalytics,
   addItemsToOrder,
+  getKitchenOrders,
 } from "../controllers/orderController";
 import { validateBody } from "../middleware/validations";
 import { createOrderSchema } from "../db/schemas/orderSchema";
@@ -29,7 +31,8 @@ router.patch("/:id/confirm", authenticate, requireRole(3), confirmOrder);
 router.patch("/:id/ready", authenticate,requireRole(2), markOrderReady);
 router.patch("/:id/deliver", authenticate, requireRole(3), deliverOrder);
 router.post("/:orderId/items", authenticate, requireRole(3, 4), addItemsToOrder,);
-
+router.get("/kitchen", authenticate,requireRole(2), getKitchenOrders,);
+router.patch("/:id/kitchen-ready", authenticate, requireRole(2), markKitchenOrderReady,);
 // Esta ruta solo calcula y devuelve los montos
 router.post("/quote", validateBody(createOrderSchema), quoteOrder);
 
