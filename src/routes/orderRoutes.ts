@@ -8,7 +8,8 @@ import {
   getOrderStatus,
   markOrderReady,
   getActiveOrder,
-  getSalesAnalytics
+  getSalesAnalytics,
+  addItemsToOrder,
 } from "../controllers/orderController";
 import { validateBody } from "../middleware/validations";
 import { createOrderSchema } from "../db/schemas/orderSchema";
@@ -27,7 +28,7 @@ router.get("/:id/status", getOrderStatus);
 router.patch("/:id/confirm", authenticate, requireRole(3), confirmOrder);
 router.patch("/:id/ready", authenticate,requireRole(2), markOrderReady);
 router.patch("/:id/deliver", authenticate, requireRole(3), deliverOrder);
-
+router.post("/:orderId/items", authenticate, requireRole(3, 4), addItemsToOrder,);
 
 // Esta ruta solo calcula y devuelve los montos
 router.post("/quote", validateBody(createOrderSchema), quoteOrder);
