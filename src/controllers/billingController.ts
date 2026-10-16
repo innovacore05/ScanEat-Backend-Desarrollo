@@ -9,7 +9,8 @@ import { products } from "../db/schemas/adminMenuSchema";
 
 import { payments, receiptDetails, receiptTaxes, receipts } from "../db/schemas/billingSchema";
 
-
+import { sharedCarts } from "../db/schemas/sharedCartSchema";
+import { emitToTable } from "../socket";
 
 const roundCurrency = (value: number) =>
   Math.round((value + Number.EPSILON) * 100) / 100;
@@ -309,7 +310,8 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         return { type: "insufficient" as const };
       }
 
-      // "reclama" la orden: si otro cobro ya la tomó, no devuelve filas
+      
+      // "reclama" la orden: si otro cobro ya la tomo, no devuelve filas
       const [claimed] = await tx
         .update(orders)
         .set({
@@ -328,6 +330,14 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         return { type: "not-payable" as const };
       }
 
+   const cancelledCarts = await tx
+        .update(sharedCarts)
+        .set({ status: "cancelled", updatedAt: new Date() })
+        .where(and(eq(sharedCarts.tableId, order.tableId), eq(sharedCarts.status, "open")))
+        .returning({ id: sharedCarts.id });
+
+
+      
       const [receipt] = await tx
         .insert(receipts)
         .values({
@@ -404,6 +414,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         totals,
         taxSummary,
         change,
+        cartsCancelled: cancelledCarts.length > 0,
       };
     });
 
@@ -432,7 +443,12 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    const { receipt, table, lines, totals, taxSummary, change } = result;
+    const { receipt, table, lines, totals, taxSummary, change, cartsCancelled } = result;
+
+ if (cartsCancelled) {
+      emitToTable(table.id, "cart:expired", {});
+    }
+
 
     return res.status(201).json({
       receiptId: receipt.receiptId,

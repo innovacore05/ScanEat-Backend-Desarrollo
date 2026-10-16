@@ -1464,9 +1464,7 @@ export const addItemsToOrder = async (
         return { type: "order-closed" as const };
       }
 
-      const productIds = parsed.data.items.map(
-        (item) => item.productId,
-      );
+    const productIds = [...new Set(parsed.data.items.map((item) => item.productId))];
 
       const productRows = await tx
         .select({
@@ -1491,6 +1489,23 @@ export const addItemsToOrder = async (
 
       if (wrongBusinessProduct) {
         return { type: "wrong-business" as const };
+      }
+
+
+       const missingFiscal = productRows.find((p) => {
+        const iva = p.ivaRate === null ? null : Number(p.ivaRate);
+        return (
+          !p.cabysCode || !/^\d{13}$/.test(p.cabysCode) || !p.ivaRateCode ||
+          iva === null || !Number.isFinite(iva) || iva <= 0 || iva > 100
+        );
+      });
+      if (missingFiscal) {
+        return { type: "product-missing-fiscal" as const, productId: missingFiscal.productId };
+      }
+
+      const invalidDiscount = productRows.find((p) => !hasValidDiscount(p.discount));
+      if (invalidDiscount) {
+        return { type: "product-invalid-discount" as const, productId: invalidDiscount.productId };
       }
 
       const productData = new Map<number, ProductPricingData>(
@@ -1817,3 +1832,4 @@ export const markKitchenOrderReady = async (
     });
   }
 };
+

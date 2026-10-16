@@ -16,6 +16,13 @@ import publicThemeRoutes from "./src/routes/publicThemeRoutes";
 import billingRoutes from "./src/routes/billingRoutes";
 import aiRoutes from "./src/routes/aiRoutes";
 import multer from "multer";
+import sharedCartRoutes from "./src/routes/sharedCartRoutes";
+
+
+
+import { createServer } from "http";
+import { initSocket } from "./src/socket";
+
 
 app.use('/api/auth', authRoutes);
 app.use("/api/menu",menuRoutes);
@@ -28,6 +35,7 @@ app.use("/api/businesses", themeRoutes);
 app.use("/api/public", publicThemeRoutes);
 app.use("/api/billing", billingRoutes);
 app.use("/api/ai", aiRoutes);
+app.use("/api/shared-carts", sharedCartRoutes);
 
 app.use('/api', (req, res) =>{
     res.status(404).json({ message: 'Endpoint not found' });
@@ -63,6 +71,13 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 
 
 
-app.listen(env.PORT, () => {
-    console.log(`Server running on port ${env.PORT}`);
+// app.listen(env.PORT, () => {
+//     console.log(`Server running on port ${env.PORT}`);
+// });
+const httpServer = createServer(app);
+
+initSocket(httpServer);
+
+httpServer.listen(env.PORT, () => {
+  console.log(`Server running on port ${env.PORT}`);
 });
