@@ -10,17 +10,17 @@ import {
   type ProductPricingData,
 } from "./orderPricing.service";
 import { emitToTable } from "../socket";
-
+import { createOrderFromCart } from "./orderCreation.service";
 
 //limites del carrito, tiempo e 60 m y max de productos 
 const CART_TTL_MS = 60 * 60 * 1000; 
 const MAX_CART_ITEMS = 100;
 const nextExpiry = () => new Date(Date.now() + CART_TTL_MS);
 
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+export type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Cart = typeof sharedCarts.$inferSelect;
 
-//para lanzar errores dle carrito y asociarle un cofigo de http
+//para lanzar errores dle carrito y asociarle un codigo de http
 export class CartError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -85,8 +85,8 @@ const emptyState = {
 };
 
 //lee productos, calcula los precios, los impuestos y prepara los datos del front
-export const buildCartState = async (cart: Cart) => {
-  const rows = await db
+export const loadCartLines = async (executor: typeof db | Tx, cartId: string) => {
+  const rows = await executor
     .select({
       item: sharedCartItems,
       name: products.productName,
@@ -98,7 +98,7 @@ export const buildCartState = async (cart: Cart) => {
     })
     .from(sharedCartItems)
     .innerJoin(products, eq(products.productId, sharedCartItems.productId))
-    .where(eq(sharedCartItems.cartId, cart.id))
+    .where(eq(sharedCartItems.cartId, cartId))
     .orderBy(sharedCartItems.id);
 
   const productData = new Map<number, ProductPricingData>(
@@ -123,6 +123,12 @@ export const buildCartState = async (cart: Cart) => {
     })),
     productData,
   );
+
+  return { rows, lines };
+};
+
+export const buildCartState = async (cart: Cart) => {
+  const { rows, lines } = await loadCartLines(db, cart.id);
 
   const sum = (f: (l: (typeof lines)[number]) => number) =>
     roundCurrency(lines.reduce((acc, l) => acc + f(l), 0));
@@ -158,6 +164,57 @@ const broadcast = async (cart: Cart) => {
   emitToTable(cart.tableId, "cart:updated", state);
   return state;
 };
+
+
+export const submitCart = async (tableId: string, observation?: string | null) => {
+  const { cart, order } = await db.transaction(async (tx) => {
+    // Bloquea el carrito
+    const [cart] = await tx
+      .select()
+      .from(sharedCarts)
+      .where(and(eq(sharedCarts.tableId, tableId), eq(sharedCarts.status, "open")))
+      .limit(1)
+      .for("update");
+
+    if (!cart) throw new CartError(409, "El carrito ya fue enviado o no existe");
+    if (cart.expiresAt <= new Date()) throw new CartError(410, "El carrito expiró");
+
+    const { rows, lines } = await loadCartLines(tx, cart.id);
+    if (rows.length === 0) throw new CartError(400, "El carrito está vacío");
+
+    const order = await createOrderFromCart(
+      tx,
+      tableId,
+      lines,
+      observation ?? cart.observation,
+    );
+
+    await tx
+      .update(sharedCarts)
+      .set({
+        status: "submitted",
+        orderId: order.orderId,
+        submittedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(sharedCarts.id, cart.id));
+
+    return { cart, order };
+  });
+
+  try {
+    emitToTable(tableId, "cart:submitted", {
+      tableId,
+      cartId: cart.id,
+      orderId: order.orderId,
+    });
+  } catch (e) {
+    console.error("No se pudo emitir cart:submitted:", e);
+  }
+
+  return order;
+};
+
 
 
 export const getCartState = async (tableId: string) => {
@@ -214,9 +271,9 @@ export const addItem = async (
       ),
     )
     .limit(1);
-  if (activeOrder && activeOrder.state !== orderStatuses.pending) {
-    throw new CartError(409, "La orden de esta mesa ya está siendo procesada");
-  }
+ if (activeOrder) {
+  throw new CartError(409, "La comanda de esta mesa ya fue enviada");
+}
 
   const existing = await findOpenCart(tableId);
   if (existing && existing.expiresAt <= new Date()) {
