@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { z } from "zod";
 import { AuthRequest } from "../middleware/authenticate";
 import {
   and,
@@ -32,6 +33,16 @@ import {
 
 const roundCurrency = (value: number) =>
   Math.round((value + Number.EPSILON) * 100) / 100;
+
+const addItemsSchema = z.object({
+  items: z.array(
+    z.object({
+      productId: z.coerce.number().int().positive(),
+      quantity: z.coerce.number().int().positive(),
+      selectedOptions: z.record(z.string(), z.string()).optional().default({}),
+    }),
+  ).min(1),
+});
 
 //validar descuentos antuos o guardados que no sean del formulario
 const hasValidDiscount = (value: unknown): boolean => {
@@ -1393,3 +1404,416 @@ export const getActiveOrder = async (req: Request, res: Response) => {
   }
 };
 
+
+export const addItemsToOrder = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    const orderId = Number(req.params.orderId);
+    const businessId = req.user?.business_id;
+
+    if (!Number.isInteger(orderId) || orderId <= 0) {
+      return res.status(400).json({
+        message: "El identificador de la orden no es válido",
+      });
+    }
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
+
+    const parsed = addItemsSchema.safeParse(req.body);
+
+    if (!parsed.success) {
+      return res.status(400).json({
+        message: "Los productos no son válidos",
+        errors: parsed.error.flatten(),
+      });
+    }
+
+    const result = await db.transaction(async (tx) => {
+      // Busca y bloquea la orden para evitar modificaciones simultáneas
+      const [orderData] = await tx
+        .select({
+          order: orders,
+          businessId: tables.businessId,
+        })
+        .from(orders)
+        .innerJoin(tables, eq(orders.tableId, tables.id))
+        .where(
+          and(
+            eq(orders.orderId, orderId),
+            eq(tables.businessId, businessId),
+          ),
+        )
+        .for("update")
+        .limit(1);
+
+      if (!orderData) {
+        return { type: "not-found" as const };
+      }
+
+      if (
+        orderData.order.state === orderStatuses.paid ||
+        orderData.order.state === orderStatuses.cancelled ||
+        orderData.order.paidAt
+      ) {
+        return { type: "order-closed" as const };
+      }
+
+      const productIds = parsed.data.items.map(
+        (item) => item.productId,
+      );
+
+      const productRows = await tx
+        .select({
+          productId: products.productId,
+          price: products.price,
+          discount: products.discount,
+          businessId: products.businessId,
+          cabysCode: products.cabysCode,
+          ivaRate: products.ivaRate,
+          ivaRateCode: products.ivaRateCode,
+        })
+        .from(products)
+        .where(inArray(products.productId, productIds));
+
+      if (productRows.length !== productIds.length) {
+        return { type: "product-not-found" as const };
+      }
+
+      const wrongBusinessProduct = productRows.find(
+        (product) => product.businessId !== businessId,
+      );
+
+      if (wrongBusinessProduct) {
+        return { type: "wrong-business" as const };
+      }
+
+      const productData = new Map<number, ProductPricingData>(
+        productRows.map((product) => [
+          product.productId,
+          {
+            price: Number(product.price),
+            discount: Number(product.discount ?? 0),
+            cabysCode: product.cabysCode!,
+            ivaRate: Number(product.ivaRate),
+            ivaRateCode: product.ivaRateCode,
+          },
+        ]),
+      );
+
+      const newLines = calculateOrderLines(
+        parsed.data.items,
+        productData,
+      );
+
+      await tx.insert(orderDetails).values(
+        newLines.map((line) => ({
+          orderId,
+          productId: line.productId,
+          quantity: line.quantity,
+          unitPrice: line.unitPrice,
+          discountAmount: line.discountAmount,
+          preparationState: "pending",
+          subtotal: line.subtotal.toFixed(2),
+          taxAmount: line.taxAmount.toFixed(2),
+          cabysCode: line.cabysCode,
+          ivaRate: line.ivaRate,
+          ivaRateCode: line.ivaRateCode,
+          selectedOptions: line.selectedOptions,
+        })),
+      );
+
+      // Recalcula usando todos los detalles, antiguos y nuevos
+      const allDetails = await tx
+        .select({
+          subtotal: orderDetails.subtotal,
+          taxAmount: orderDetails.taxAmount,
+        })
+        .from(orderDetails)
+        .where(eq(orderDetails.orderId, orderId));
+
+      const subtotal = roundCurrency(
+        allDetails.reduce(
+          (sum, detail) => sum + Number(detail.subtotal),
+          0,
+        ),
+      );
+
+      const tax = roundCurrency(
+        allDetails.reduce(
+          (sum, detail) => sum + Number(detail.taxAmount ?? 0),
+          0,
+        ),
+      );
+
+      const total = roundCurrency(subtotal + tax);
+
+      const newState =
+        orderData.order.state === orderStatuses.ready
+          ? orderStatuses.inPreparation
+          : orderData.order.state;
+
+      const [updatedOrder] = await tx
+        .update(orders)
+        .set({
+          subtotal: subtotal.toFixed(2),
+          tax: tax.toFixed(2),
+          total: total.toFixed(2),
+          state: newState,
+        })
+        .where(eq(orders.orderId, orderId))
+        .returning();
+
+      return {
+        type: "success" as const,
+        order: updatedOrder,
+        addedItems: newLines,
+        totals: {
+          subtotal: subtotal.toFixed(2),
+          tax: tax.toFixed(2),
+          total: total.toFixed(2),
+        },
+      };
+    });
+
+    if (result.type === "not-found") {
+      return res.status(404).json({
+        message: "Orden no encontrada",
+      });
+    }
+
+    if (result.type === "order-closed") {
+      return res.status(409).json({
+        message: "No se pueden agregar productos a una orden cerrada",
+      });
+    }
+
+    if (result.type === "product-not-found") {
+      return res.status(404).json({
+        message: "Uno de los productos no existe",
+      });
+    }
+
+    if (result.type === "wrong-business") {
+      return res.status(403).json({
+        message: "El producto no pertenece a este negocio",
+      });
+    }
+
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error("Error agregando productos a la orden:", error);
+
+    return res.status(500).json({
+      message: "No se pudieron agregar los productos",
+    });
+  }
+};
+
+export const getKitchenOrders = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
+
+    const rows = await db
+      .select({
+        order: orders,
+        table: tables,
+        detail: orderDetails,
+        product: {
+          productId: products.productId,
+          productName: products.productName,
+          isCustom: products.isCustom,
+        },
+        modifierGroup: modifierGroups,
+        modifierOption: modifierOptions,
+      })
+      .from(orders)
+      .innerJoin(tables, eq(orders.tableId, tables.id))
+      .innerJoin(orderDetails, eq(orders.orderId, orderDetails.orderId))
+      .innerJoin(
+        products,
+        and(
+          eq(orderDetails.productId, products.productId),
+          eq(products.businessId, businessId),
+        ),
+      )
+      .leftJoin(
+        modifierGroups,
+        eq(products.productId, modifierGroups.productId),
+      )
+      .leftJoin(
+        modifierOptions,
+        eq(modifierGroups.id, modifierOptions.groupId),
+      )
+      .where(
+        and(
+          eq(tables.businessId, businessId),
+          inArray(orders.state, [
+            orderStatuses.inPreparation,
+            orderStatuses.delivered,
+          ]),
+          eq(orderDetails.preparationState, "pending"),
+        ),
+      )
+      .orderBy(desc(orders.date), desc(orders.orderId));
+
+    const ordersById = new Map<number, any>();
+
+    for (const row of rows) {
+      let current = ordersById.get(row.order.orderId);
+
+      if (!current) {
+        current = {
+          order: row.order,
+          table: row.table,
+          details: [],
+        };
+        ordersById.set(row.order.orderId, current);
+      }
+
+      let detail = current.details.find(
+        (item: any) => item.detailId === row.detail.detailId,
+      );
+
+      if (!detail) {
+        detail = {
+          detailId: row.detail.detailId,
+          productId: row.product.productId,
+          productName: row.product.productName,
+          quantity: row.detail.quantity,
+          unitPrice: row.detail.unitPrice,
+          discountAmount: row.detail.discountAmount,
+          subtotal: row.detail.subtotal,
+          isCustom: row.product.isCustom,
+          selectedOptions: row.detail.selectedOptions,
+          optionGroups: [],
+        };
+        current.details.push(detail);
+      }
+
+      if (row.product.isCustom === 1 && row.modifierGroup) {
+        let group = detail.optionGroups.find(
+          (item: any) => item.id === row.modifierGroup!.id,
+        );
+
+        if (!group) {
+          group = {
+            id: row.modifierGroup.id,
+            name: row.modifierGroup.name,
+            options: [],
+          };
+          detail.optionGroups.push(group);
+        }
+
+        if (
+          row.modifierOption &&
+          !group.options.some(
+            (item: any) => item.id === row.modifierOption!.id,
+          )
+        ) {
+          group.options.push({
+            id: row.modifierOption.id,
+            name: row.modifierOption.name,
+          });
+        }
+      }
+    }
+
+    return res.status(200).json(Array.from(ordersById.values()));
+  } catch (error) {
+    console.error("Error obteniendo pedidos de cocina:", error);
+    return res.status(500).json({
+      message: "No se pudieron obtener los pedidos de cocina",
+    });
+  }
+};
+
+export const markKitchenOrderReady = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    const orderId = Number(req.params.id);
+    const businessId = req.user?.business_id;
+
+    if (!Number.isInteger(orderId) || orderId <= 0 || !businessId) {
+      return res.status(400).json({ message: "Datos de orden no válidos" });
+    }
+
+    const result = await db.transaction(async (tx) => {
+      const [order] = await tx
+        .select({
+          state: orders.state,
+        })
+        .from(orders)
+        .innerJoin(tables, eq(orders.tableId, tables.id))
+        .where(
+          and(
+            eq(orders.orderId, orderId),
+            eq(tables.businessId, businessId),
+          ),
+        )
+        .for("update")
+        .limit(1);
+
+      if (!order) return "not-found";
+
+      if (
+        order.state !== orderStatuses.inPreparation &&
+        order.state !== orderStatuses.delivered
+      ) {
+        return "invalid-state";
+      }
+
+      await tx
+        .update(orderDetails)
+        .set({ preparationState: "ready" })
+        .where(
+          and(
+            eq(orderDetails.orderId, orderId),
+            eq(orderDetails.preparationState, "pending"),
+          ),
+        );
+
+      if (order.state === orderStatuses.inPreparation) {
+        await tx
+          .update(orders)
+          .set({ state: orderStatuses.ready })
+          .where(eq(orders.orderId, orderId));
+      }
+
+      return "ok";
+    });
+
+    if (result === "not-found") {
+      return res.status(404).json({ message: "Orden no encontrada" });
+    }
+
+    if (result === "invalid-state") {
+      return res.status(409).json({
+        message: "La orden no está en un estado válido para cocina",
+      });
+    }
+
+    return res.status(200).json({ message: "Productos marcados como listos" });
+  } catch (error) {
+    console.error("Error marcando productos de cocina como listos:", error);
+    return res.status(500).json({
+      message: "No se pudieron marcar los productos como listos",
+    });
+  }
+};

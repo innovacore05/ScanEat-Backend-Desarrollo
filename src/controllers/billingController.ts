@@ -1,19 +1,19 @@
 import { Response } from "express";
-import { and,eq,isNull } from "drizzle-orm";
-import {z} from "zod";   
+import { and, eq, isNull } from "drizzle-orm";
+import { z } from "zod";
 import { AuthRequest } from "../middleware/authenticate";
 import db from "../db/connection";
-import { orderDetails,orders,orderStatuses } from "../db/schemas/orderSchema";
-import { tables } from "../db/schemas/mesaSchema";  
-import { products } from "../db/schemas/adminMenuSchema";   
+import { orderDetails, orders, orderStatuses } from "../db/schemas/orderSchema";
+import { tables } from "../db/schemas/mesaSchema";
+import { products } from "../db/schemas/adminMenuSchema";
 
-import  {payments, receiptDetails, receiptTaxes,receipts } from "../db/schemas/billingSchema";
+import { payments, receiptDetails, receiptTaxes, receipts } from "../db/schemas/billingSchema";
 
 
 
-const roundCurrency=(value:number)=>
-    Math.round((value+Number.EPSILON) * 100) /100; 
-    
+const roundCurrency = (value: number) =>
+  Math.round((value + Number.EPSILON) * 100) / 100;
+
 type LineRow = {
   detail: {
     detailId: number;
@@ -63,11 +63,11 @@ const buildLines = (rows: LineRow[]) =>
     const discount = Number(row.detail.discountAmount);
     const subtotal = Number(row.detail.subtotal);
 
-   const tax = Number(row.detail.taxAmount);
+    const tax = Number(row.detail.taxAmount);
     const gross = roundCurrency(unitPrice * quantity);
     const total = roundCurrency(subtotal + tax);
 
-    
+
     return {
       detailId: row.detail.detailId,
       detail: row.product.productName,
@@ -78,7 +78,7 @@ const buildLines = (rows: LineRow[]) =>
       subtotal: row.detail.subtotal,
       tax: tax.toFixed(2),
       //cabys
-        cabysCode: row.detail.cabysCode!,
+      cabysCode: row.detail.cabysCode!,
       ivaRate: row.detail.ivaRate!,
       ivaRateCode: row.detail.ivaRateCode!,
 
@@ -128,7 +128,7 @@ const buildTaxSummary = (lines: BuiltLine[]) => {
 
 
 export const getPaymentPreview = async (
-  req: AuthRequest, 
+  req: AuthRequest,
   res: Response,) => {
   try {
     const orderId = Number(req.params.orderId);
@@ -146,26 +146,26 @@ export const getPaymentPreview = async (
       });
     }
 
-  const rows = await db
-  .select({
-    order: orders,
-    table: tables,
-    detail: orderDetails,
-    product: {
-      productName: products.productName,
-    },
-  })
-  .from(orders)
-  .innerJoin(tables, eq(orders.tableId, tables.id))
-  .innerJoin(orderDetails, eq(orders.orderId, orderDetails.orderId))
-  // cambys: relaciona cada detalle con su producto para obtener el nombre
-  .innerJoin(products, eq(orderDetails.productId, products.productId))
-  .where(
-    and(
-      eq(orders.orderId, orderId),
-      eq(tables.businessId, businessId),
-    ),
-  );
+    const rows = await db
+      .select({
+        order: orders,
+        table: tables,
+        detail: orderDetails,
+        product: {
+          productName: products.productName,
+        },
+      })
+      .from(orders)
+      .innerJoin(tables, eq(orders.tableId, tables.id))
+      .innerJoin(orderDetails, eq(orders.orderId, orderDetails.orderId))
+      // cambys: relaciona cada detalle con su producto para obtener el nombre
+      .innerJoin(products, eq(orderDetails.productId, products.productId))
+      .where(
+        and(
+          eq(orders.orderId, orderId),
+          eq(tables.businessId, businessId),
+        ),
+      );
     if (rows.length === 0) {
       return res.status(404).json({ message: "Orden no encontrada" });
     }
@@ -196,14 +196,15 @@ export const getPaymentPreview = async (
 
     const lines = buildLines(rows);
 
-     return res.status(200).json({
-      orderId: firstRow.order.orderId,
-      tableNumber: firstRow.table.tableNumber,
-      lines,
-      totals: buildTotals(lines),
-      taxSummary: buildTaxSummary(lines),
-      missingCabys: [],
-    });
+    return res.status(200).json({
+  orderId: firstRow.order.orderId,
+  tableId: firstRow.order.tableId,
+  tableNumber: firstRow.table.tableNumber,
+  lines,
+  totals: buildTotals(lines),
+  taxSummary: buildTaxSummary(lines),
+  missingCabys: [],
+});
 
 
   } catch (error) {
@@ -277,11 +278,11 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
       }
 
       const { order, table } = rows[0];
-     
 
-//cabys:valida los datos fiscales antes de marar pagado
-  const missingFiscalLine = findMissingFiscalLine(rows);
- 
+
+      //cabys:valida los datos fiscales antes de marar pagado
+      const missingFiscalLine = findMissingFiscalLine(rows);
+
 
       if (missingFiscalLine) {
         return {
@@ -297,7 +298,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         return { type: "not-payable" as const };
       }
 
- // lineas y totales salen de la misma fuente, y de aqui sale TODO
+      // lineas y totales salen de la misma fuente, y de aqui sale TODO
       const lines = buildLines(rows);
       const totals = buildTotals(lines);
       const taxSummary = buildTaxSummary(lines);
@@ -314,7 +315,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         .set({
           state: orderStatuses.paid,
           paidAt: new Date(),
-        }) .where(
+        }).where(
           and(
             eq(orders.orderId, orderId),
             eq(orders.state, orderStatuses.delivered),
@@ -327,12 +328,12 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         return { type: "not-payable" as const };
       }
 
-    const [receipt] = await tx
+      const [receipt] = await tx
         .insert(receipts)
         .values({
           businessId,
           orderId,
-          documentType: "04", 
+          documentType: "04",
           totalSale: totals.totalSale,
           totalDiscount: totals.totalDiscount,
           totalNetSale: totals.totalNetSale,
@@ -341,7 +342,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         })
         .returning();
 
-// cabys:guardar el CABYS real del detalle del pedido
+      // cabys:guardar el CABYS real del detalle del pedido
       const savedReceiptLines = await tx
         .insert(receiptDetails)
         .values(
@@ -364,7 +365,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
           lineNumber: receiptDetails.lineNumber,
         });
 
-     // cabys: guardar tarifa y monto de IVA 
+      // cabys: guardar tarifa y monto de IVA 
       await tx.insert(receiptTaxes).values(
         savedReceiptLines.map((savedLine) => {
           const line = lines[savedLine.lineNumber - 1];
@@ -388,7 +389,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         receiptId: receipt.receiptId,
         method: METHOD_CODES[payload.method],
         reference: payload.method === "cash" ? null : payload.reference,
-               amount: totals.totalSale,
+        amount: totals.totalSale,
         amountTendered:
           payload.method === "cash" ? payload.amountTendered.toFixed(2) : null,
         changeGiven: change === null ? null : change.toFixed(2),
@@ -423,7 +424,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
     }
 
 
- if (result.type === "missing-fiscal") {
+    if (result.type === "missing-fiscal") {
       return res.status(409).json({
         message:
           `El producto ${result.productId} no tiene CABYS e IVA completos. ` +
@@ -431,7 +432,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
       });
     }
 
-   const { receipt, table, lines, totals, taxSummary, change } = result;
+    const { receipt, table, lines, totals, taxSummary, change } = result;
 
     return res.status(201).json({
       receiptId: receipt.receiptId,
