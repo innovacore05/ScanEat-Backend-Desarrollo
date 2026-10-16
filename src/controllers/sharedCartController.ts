@@ -60,3 +60,13 @@ export const removeItem = handle(async (req, res) => {
   const { clientId } = clientQuery.parse(req.query);
   res.status(200).json(await cartService.removeItem(tableId, itemId, clientId));
 });
+
+const submitBody = z.object({
+  observation: z.string().trim().max(500).optional(),
+});
+
+export const submitCart = handle(async (req, res) => {
+  const { tableId } = tableParams.parse(req.params);
+  const { observation } = submitBody.parse(req.body ?? {});
+  res.status(201).json({ order: await cartService.submitCart(tableId, observation) });
+});
