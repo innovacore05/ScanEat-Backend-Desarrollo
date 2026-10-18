@@ -62,7 +62,7 @@ html: `
           </h2>
 
           <p style="margin: 0 0 24px; color: #5d6b63; font-size: 15px; line-height: 1.7;">
-            ¡Hola! Utiliza el siguiente código para completar la verificación de tu cuenta.
+            ¡Hola! Utiliza el siguiente código para verificación.
           </p>
 
           <!-- Código de verificación -->
@@ -164,7 +164,7 @@ html: `
 //         </h2>
 
 //         <p style="margin: 0 0 24px; color: #5d6b63; font-size: 15px; line-height: 1.7;">
-//           ¡Hola! Utiliza el siguiente código para completar la verificación de tu cuenta.
+//           ¡Hola! Utiliza el siguiente código para verificación.
 //         </p>
 
 //         <!-- Código de verificación -->
