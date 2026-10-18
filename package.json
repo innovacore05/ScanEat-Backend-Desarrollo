@@ -45,7 +45,7 @@
     "@types/express": "^5.0.6",
     "@types/morgan": "^1.9.10",
     "@types/multer": "^2.2.0",
-    "@types/node": "^25.8.0",
+    "@types/node": "^25.9.9",
     "custom-env": "^2.0.6",
     "drizzle-kit": "^0.31.10",
     "morgan": "^1.10.1",
