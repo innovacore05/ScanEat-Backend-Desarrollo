@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/connection";
 import { createReviewsSchema, reviews } from "../db/schemas/reviewSchema";
@@ -54,9 +54,11 @@ export const getOrderReviewItems = async (req: Request, res: Response) => {
     }
 
     if (!clientIdParsed.success) {
-  return res.status(400).json({ message: "El identificador de dispositivo no es válido" });
-}
-const clientId = clientIdParsed.data;
+      return res.status(400).json({
+        message: "El identificador de dispositivo no es válido",
+      });
+    }
+    const clientId = clientIdParsed.data;
 
     const [order] = await db
       .select({
@@ -126,11 +128,14 @@ const clientId = clientIdParsed.data;
       )
       .leftJoin(reviews, eq(reviews.orderDetailId, orderDetails.detailId))
       .where(
-  and(
-    eq(orderDetails.orderId, orderId),
-    eq(orderDetails.clientId, clientId),
-  ),
-);
+        and(
+          eq(orderDetails.orderId, orderId),
+          or(
+            eq(orderDetails.clientId, clientId),
+            isNull(orderDetails.clientId),
+          ),
+        ),
+      );
 
     return res.status(200).json({
       orderId,
@@ -263,8 +268,11 @@ export const createReviews = async (req: Request, res: Response) => {
      .where(
   and(
     eq(orderDetails.orderId, orderId),
-    eq(orderDetails.clientId, clientId),
     inArray(orderDetails.detailId, detailIds),
+    or(
+      eq(orderDetails.clientId, clientId),
+      isNull(orderDetails.clientId),
+    ),
   ),
 );
     const purchasedDetailIds = new Set(orderItems.map((item) => item.detailId));

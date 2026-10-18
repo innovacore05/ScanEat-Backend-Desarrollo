@@ -43,7 +43,7 @@ export const reviews = pgTable(
             .references(() => tables.id, { onDelete: 
                 "restrict" }),
 
-        rating: integer("rating").notNull(),
+        rating: integer("rating"),
 
         name: text("name"),
 
