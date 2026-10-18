@@ -56,8 +56,9 @@ export const orderDetails = pgTable("order_details", {
     precision: 10,
     scale: 2,
   }).notNull().default("0.00"),
-
-
+  preparationState: varchar("preparation_state", { length: 20 })
+  .notNull()
+  .default("pending"),
   subtotal: numeric("subtotal", { precision: 10, scale: 2 }).notNull(),
   selectedOptions: json("selected_options")
     .$type<Record<string, string>>()

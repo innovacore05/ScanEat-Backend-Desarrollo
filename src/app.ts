@@ -17,15 +17,14 @@ app.set('trust proxy', 1);
 //en el .env del front: VITE_API_URL=http://localhost:3000
 //Si hay problemas puede ser que cambio elpuerto o el cors 
 
+
+export const getAllowedOrigins = () =>
+  (process.env.FRONTEND_URL ?? "").split(",").map((o) => o.trim()).filter(Boolean);
+
 app.use(cors({
     origin: (origin, callback) => {
-        const allowedOrigins = (process.env.FRONTEND_URL ?? '')
-            .split(',')
-            .map((o) => o.trim())
-            .filter(Boolean);
-
-        // permite requests sin origin como postman
-        if (!origin || allowedOrigins.includes(origin)) {
+      
+        if (!origin || getAllowedOrigins().includes(origin)) {
             callback(null, true);
         } else {
             callback(new Error('Not allowed by CORS'));
@@ -33,7 +32,6 @@ app.use(cors({
     },
     credentials: true,
 }));
-
 
 
 
