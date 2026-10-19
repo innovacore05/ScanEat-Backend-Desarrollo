@@ -121,17 +121,17 @@ export const createOrderSchema = z
     clientId: z.uuid().optional(),
     observation: z.string().trim().max(1000, "La observación es demasiado larga").optional(),
     items: z.array(orderItemSchema).min(1, "El pedido debe incluir al menos un producto"),
-  })
-  .superRefine((order, context) => {
-    const productIds = order.items.map((item) => item.productId);
-    if (new Set(productIds).size !== productIds.length) {
-      context.addIssue({
-        code: "custom",
-        path: ["items"],
-        message: "No se puede repetir un producto; ajusta su cantidad",
-      });
-    }
   });
+  // .superRefine((order, context) => {
+  //   const productIds = order.items.map((item) => item.productId);
+  //   if (new Set(productIds).size !== productIds.length) {
+  //     context.addIssue({
+  //       code: "custom",
+  //       path: ["items"],
+  //       message: "No se puede repetir un producto; ajusta su cantidad",
+  //     });
+  //   }
+  // });
 
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
 export type OrderStatus = z.infer<typeof orderStatusSchema>;
