@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "../db/connection";
 import { createReviewsSchema, reviews } from "../db/schemas/reviewSchema";
@@ -7,6 +7,7 @@ import { tables } from "../db/schemas/mesaSchema";
 import { orderDetails, orders, orderStatuses } from "../db/schemas/orderSchema";
 import { products } from "../db/schemas/adminMenuSchema";
 import { AuthRequest } from "../middleware/authenticate";
+import { moderateReview } from "../services/geminiService";
 
 const getOrderId = (value: unknown) => {
   if (typeof value !== "string") {
@@ -53,9 +54,11 @@ export const getOrderReviewItems = async (req: Request, res: Response) => {
     }
 
     if (!clientIdParsed.success) {
-  return res.status(400).json({ message: "El identificador de dispositivo no es válido" });
-}
-const clientId = clientIdParsed.data;
+      return res.status(400).json({
+        message: "El identificador de dispositivo no es válido",
+      });
+    }
+    const clientId = clientIdParsed.data;
 
     const [order] = await db
       .select({
@@ -125,11 +128,14 @@ const clientId = clientIdParsed.data;
       )
       .leftJoin(reviews, eq(reviews.orderDetailId, orderDetails.detailId))
       .where(
-  and(
-    eq(orderDetails.orderId, orderId),
-    eq(orderDetails.clientId, clientId),
-  ),
-);
+        and(
+          eq(orderDetails.orderId, orderId),
+          or(
+            eq(orderDetails.clientId, clientId),
+            isNull(orderDetails.clientId),
+          ),
+        ),
+      );
 
     return res.status(200).json({
       orderId,
@@ -249,6 +255,7 @@ export const createReviews = async (req: Request, res: Response) => {
       .select({
         detailId: orderDetails.detailId,
         productId: orderDetails.productId,
+        productName: products.productName,
       })
       .from(orderDetails)
       .innerJoin(
@@ -261,8 +268,11 @@ export const createReviews = async (req: Request, res: Response) => {
      .where(
   and(
     eq(orderDetails.orderId, orderId),
-    eq(orderDetails.clientId, clientId),
     inArray(orderDetails.detailId, detailIds),
+    or(
+      eq(orderDetails.clientId, clientId),
+      isNull(orderDetails.clientId),
+    ),
   ),
 );
     const purchasedDetailIds = new Set(orderItems.map((item) => item.detailId));
@@ -295,19 +305,102 @@ export const createReviews = async (req: Request, res: Response) => {
       });
     }
 
+    const moderationResults = await Promise.all(
+      reviewItems.map(async (review) => {
+        const reviewerName = review.name?.trim() || null;
+        const comment = review.comment?.trim() || null;
+
+        if (!reviewerName && !comment) {
+          return {
+            detailId: review.detailId,
+            approved: true,
+            correctedComment: null,
+            rejectedFields: [],
+            reason: null,
+          };
+        }
+
+        const orderItem = orderItems.find(
+          (item) => item.detailId === review.detailId,
+        );
+
+        if (!orderItem) {
+          throw Object.assign(
+            new Error("No se encontró el platillo asociado a la reseña"),
+            { status: 400, detailId: review.detailId },
+          );
+        }
+
+        const moderation = await moderateReview(
+          orderItem.productName,
+          reviewerName,
+          comment,
+        );
+
+        return {
+          detailId: review.detailId,
+          approved: moderation.approved,
+          correctedComment: moderation.correctedComment?.trim() ?? null,
+          rejectedFields: moderation.rejectedFields,
+          reason: moderation.reason,
+        };
+      }),
+    ).catch((error: unknown) => {
+      if (
+        error &&
+        typeof error === "object" &&
+        "status" in error &&
+        error.status === 400 &&
+        "detailId" in error
+      ) {
+        throw {
+          status: 400,
+          message: "No se encontró el platillo asociado a una de las reseñas",
+          detailId: error.detailId,
+        };
+      }
+
+      console.error("Error moderando las reseñas con Gemini:", error);
+      throw {
+        status: 503,
+        message: "No se pudieron validar las reseñas con IA. Inténtalo de nuevo.",
+      };
+    });
+
+    const rejectedReviews = moderationResults
+      .filter((result) => !result.approved)
+      .map((result) => ({
+        detailId: result.detailId,
+        fields: result.rejectedFields,
+        reason: result.reason ?? "El nombre o comentario no cumple las reglas.",
+      }));
+
+    if (rejectedReviews.length > 0) {
+      return res.status(422).json({
+        message: "Corrige los nombres o comentarios indicados antes de enviarlos.",
+        rejectedReviews,
+      });
+    }
+
+    const approvedComments = new Map<number, string | null>();
+
+    for (const result of moderationResults) {
+      approvedComments.set(result.detailId, result.correctedComment);
+    }
     await db.insert(reviews).values(
       reviewItems.map((review) => {
         const orderItem = orderItems.find(
           (item) => item.detailId === review.detailId,
         );
+
         return {
           orderId,
           orderDetailId: review.detailId,
           productId: orderItem!.productId,
           tableId: order.tableId,
           rating: review.rating,
-          name: review.name || null,
-          comment: review.comment || null,
+          name: review.name?.trim() || null,
+          comment: approvedComments.get(review.detailId) ?? null,
         };
       }),
     );
@@ -315,8 +408,28 @@ export const createReviews = async (req: Request, res: Response) => {
     return res.status(201).json({
       message: "Reseñas guardadas correctamente",
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error guardando reseñas:", error);
+
+    if (error?.status === 400) {
+      return res.status(400).json({
+        message: error.message ?? "Los datos de la reseña no son válidos",
+        detailId: error.detailId,
+      });
+    }
+
+    if (error?.status === 422) {
+      return res.status(422).json({
+        message: error.message ?? "Corrige las reseñas indicadas antes de enviarlas.",
+        rejectedReviews: error.rejectedReviews ?? [],
+      });
+    }
+
+    if (error?.status === 503) {
+      return res.status(503).json({
+        message: error.message ?? "No se pudieron validar las reseñas con IA.",
+      });
+    }
 
     return res.status(500).json({
       message: "No se pudieron guardar las reseñas",
