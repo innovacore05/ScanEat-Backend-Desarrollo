@@ -9,7 +9,7 @@ import {
   roundCurrency,
   type ProductPricingData,
 } from "./orderPricing.service";
-import { emitToTable } from "../socket";
+import { emitToTable,emitOrderChanged } from "../socket";
 import { createOrderFromCart } from "./orderCreation.service";
 
 //limites del carrito, tiempo e 60 m y max de productos 
@@ -202,11 +202,17 @@ export const submitCart = async (tableId: string, observation?: string | null) =
     return { cart, order };
   });
 
-  try {
+     try {
     emitToTable(tableId, "cart:submitted", {
       tableId,
       cartId: cart.id,
       orderId: order.orderId,
+    });
+
+    emitOrderChanged({
+      order_id: order.orderId,
+      table_id: tableId,
+      state: orderStatuses.pending,
     });
   } catch (e) {
     console.error("No se pudo emitir cart:submitted:", e);
@@ -214,8 +220,6 @@ export const submitCart = async (tableId: string, observation?: string | null) =
 
   return order;
 };
-
-
 
 export const getCartState = async (tableId: string) => {
   const cart = await findOpenCart(tableId);

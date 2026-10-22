@@ -28,7 +28,7 @@ import {
   orderStatusSchema,
   type CreateOrderInput
 } from "../db/schemas/orderSchema";
-
+import {emitToTable, emitOrderChanged } from "../socket";
 
 
 const roundCurrency = (value: number) =>
@@ -163,11 +163,17 @@ const transitionOrderState = async (
       .returning();
 
     if (updatedOrder) {
-      return res.status(200).json({
-        message: `Orden ${actionLabel} correctamente`,
-        order: updatedOrder,
-      });
-    }
+  emitOrderChanged({
+    order_id: updatedOrder.orderId,
+    table_id: updatedOrder.tableId,
+    state: updatedOrder.state,
+  });
+
+  return res.status(200).json({
+    message: `Orden ${actionLabel} correctamente`,
+    order: updatedOrder,
+  });
+}
 
     const [currentOrder] = await db
       .select({ state: orders.state })
@@ -703,8 +709,7 @@ export const createOrder = async (req: Request, res: Response) => {
     //cabys:informar queproducto necesita cabys/iva
     if (result.type === "product-missing-fiscal") {
       return res.status(409).json({
-        message:
-          `El producto ${result.productId} no tiene CABYS e IVA configurados. Revisa el producto antes de crear el pedido.`,
+        message: `El producto ${result.productId} no tiene CABYS e IVA configurados. Revisa el producto antes de crear el pedido.`,
       });
     }
 
@@ -721,9 +726,14 @@ export const createOrder = async (req: Request, res: Response) => {
         message: "La orden de esta mesa ya está siendo procesada",
         orderId: result.order.orderId,
         state: result.order.state,
-
       });
-    }//creada o actualzada
+    }
+
+emitOrderChanged({
+  order_id: result.order.orderId,
+  table_id: result.order.tableId,
+  state: result.order.state,
+});
 
     return res
       .status
@@ -1620,7 +1630,26 @@ export const addItemsToOrder = async (
       });
     }
 
+    if (result.type === "product-missing-fiscal") {
+      return res.status(409).json({
+        message: `El producto ${result.productId} no tiene CABYS e IVA configurados.`,
+      });
+    }
+
+    if (result.type === "product-invalid-discount") {
+      return res.status(409).json({
+        message: `El producto ${result.productId} tiene un descuento inválido.`,
+      });
+    }
+
+    emitOrderChanged({
+      order_id: result.order.orderId,
+      table_id: result.order.tableId,
+      state: result.order.state,
+    });
+
     return res.status(200).json(result);
+
   } catch (error) {
     console.error("Error agregando productos a la orden:", error);
 
@@ -1773,6 +1802,7 @@ export const markKitchenOrderReady = async (
       const [order] = await tx
         .select({
           state: orders.state,
+          tableId: orders.tableId,
         })
         .from(orders)
         .innerJoin(tables, eq(orders.tableId, tables.id))
@@ -1811,20 +1841,35 @@ export const markKitchenOrderReady = async (
           .where(eq(orders.orderId, orderId));
       }
 
-      return "ok";
+        return {
+        tableId: order.tableId,
+        state:
+          order.state === orderStatuses.inPreparation
+            ? orderStatuses.ready
+            : order.state,
+      };
     });
 
     if (result === "not-found") {
       return res.status(404).json({ message: "Orden no encontrada" });
     }
 
-    if (result === "invalid-state") {
+  
+  if (result === "invalid-state") {
       return res.status(409).json({
         message: "La orden no está en un estado válido para cocina",
       });
     }
 
+    emitOrderChanged({
+      order_id: orderId,
+      table_id: result.tableId,
+      state: result.state,
+    });
+
     return res.status(200).json({ message: "Productos marcados como listos" });
+
+
   } catch (error) {
     console.error("Error marcando productos de cocina como listos:", error);
     return res.status(500).json({

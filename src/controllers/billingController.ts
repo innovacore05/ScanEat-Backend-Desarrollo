@@ -10,7 +10,7 @@ import { products } from "../db/schemas/adminMenuSchema";
 import { payments, receiptDetails, receiptTaxes, receipts } from "../db/schemas/billingSchema";
 
 import { sharedCarts } from "../db/schemas/sharedCartSchema";
-import { emitToTable } from "../socket";
+import { emitToTable,emitOrderChanged } from "../socket";
 
 const roundCurrency = (value: number) =>
   Math.round((value + Number.EPSILON) * 100) / 100;
@@ -445,10 +445,15 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
 
     const { receipt, table, lines, totals, taxSummary, change, cartsCancelled } = result;
 
- if (cartsCancelled) {
+    if (cartsCancelled) {
       emitToTable(table.id, "cart:expired", {});
     }
 
+    emitOrderChanged({
+      order_id: orderId,
+      table_id: table.id,
+      state: orderStatuses.paid,
+    });
 
     return res.status(201).json({
       receiptId: receipt.receiptId,
