@@ -414,7 +414,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         totals,
         taxSummary,
         change,
-        cartsCancelled: cancelledCarts.length > 0,
+       cancelledCartIds: cancelledCarts.map((cart) => cart.id),
       };
     });
 
@@ -443,11 +443,11 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    const { receipt, table, lines, totals, taxSummary, change, cartsCancelled } = result;
+  const { receipt, table, lines, totals, taxSummary, change, cancelledCartIds } = result;
 
-    if (cartsCancelled) {
-      emitToTable(table.id, "cart:expired", {});
-    }
+for (const cartId of cancelledCartIds) {
+  emitToTable(table.id, "cart:expired", { cartId });
+}
 
     emitOrderChanged({
       order_id: orderId,
