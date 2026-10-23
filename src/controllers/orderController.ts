@@ -163,11 +163,12 @@ const transitionOrderState = async (
       .returning();
 
     if (updatedOrder) {
-  emitOrderChanged({
-    order_id: updatedOrder.orderId,
-    table_id: updatedOrder.tableId,
-    state: updatedOrder.state,
-  });
+ emitOrderChanged({
+  order_id: updatedOrder.orderId,
+  table_id: updatedOrder.tableId,
+  state: updatedOrder.state,
+  business_id: businessId,
+});
 
   return res.status(200).json({
     message: `Orden ${actionLabel} correctamente`,
@@ -629,11 +630,12 @@ export const createOrder = async (req: Request, res: Response) => {
           })),
         );
 
-        return {
-          type: "updated" as const,
-          order: updateOrder,
-          details: detailValues
-        };
+       return {
+  type: "updated" as const,
+  order: updateOrder,
+  details: detailValues,
+  businessId: table.businessId,
+};
 
       }
 
@@ -683,10 +685,11 @@ export const createOrder = async (req: Request, res: Response) => {
       );
 
       return {
-        type: "created" as const,
-        order,
-        details: detailValues,
-      };
+  type: "created" as const,
+  order,
+  details: detailValues,
+  businessId: table.businessId,
+};
     });
 
     if (result.type === "table-not-found") {
@@ -733,6 +736,7 @@ emitOrderChanged({
   order_id: result.order.orderId,
   table_id: result.order.tableId,
   state: result.order.state,
+  business_id: result.businessId,
 });
 
     return res
@@ -1643,10 +1647,11 @@ export const addItemsToOrder = async (
     }
 
     emitOrderChanged({
-      order_id: result.order.orderId,
-      table_id: result.order.tableId,
-      state: result.order.state,
-    });
+  order_id: result.order.orderId,
+  table_id: result.order.tableId,
+  state: result.order.state,
+  business_id: businessId,
+});
 
     return res.status(200).json(result);
 
@@ -1862,10 +1867,11 @@ export const markKitchenOrderReady = async (
     }
 
     emitOrderChanged({
-      order_id: orderId,
-      table_id: result.tableId,
-      state: result.state,
-    });
+  order_id: orderId,
+  table_id: result.tableId,
+  state: result.state,
+  business_id: businessId,
+});
 
     return res.status(200).json({ message: "Productos marcados como listos" });
 

@@ -450,10 +450,11 @@ for (const cartId of cancelledCartIds) {
 }
 
     emitOrderChanged({
-      order_id: orderId,
-      table_id: table.id,
-      state: orderStatuses.paid,
-    });
+  order_id: orderId,
+  table_id: table.id,
+  state: orderStatuses.paid,
+  business_id: table.businessId,
+});
 
     return res.status(201).json({
       receiptId: receipt.receiptId,
