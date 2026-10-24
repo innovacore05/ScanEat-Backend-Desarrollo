@@ -1,4 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
+import OpenAI from "openai";
 import { z } from "zod";
 
 const apiKey = process.env.GEMINI_API_KEY;
@@ -10,6 +11,14 @@ if (!apiKey) {
 export const gemini = new GoogleGenAI({
   apiKey,
 });
+
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+      timeout: 10000,
+      maxRetries: 0,
+    })
+  : null;
 
 //Este es el tipo de datos que se envía a Gemini para generar el reporte de ventas.
 // Contiene el periodo de tiempo, un resumen de las ventas, el producto más vendido, las horas pico y los pedidos cancelados.
@@ -190,4 +199,129 @@ export const moderateReview = async (
   }
 
   return parsed.data;
+};
+
+export type MenuSuggestion = {
+  productId: number;
+  productName: string;
+  description: string;
+  categoryName: string;
+  price: number;
+};
+
+export type MenuRole = "meal" | "drink" | "dessert";
+
+export type MenuChatResult = {
+  reply: string;
+  recommendations: {
+    productId: number;
+    role: MenuRole;
+    reason: string;
+  }[];
+};
+
+function esperar<T>(promesa: Promise<T>, milisegundos: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const temporizador = setTimeout(() => {
+      reject(new Error("Gemini tardó demasiado"));
+    }, milisegundos);
+
+    promesa.then(
+      (resultado) => {
+        clearTimeout(temporizador);
+        resolve(resultado);
+      },
+      (error) => {
+        clearTimeout(temporizador);
+        reject(error);
+      },
+    );
+  });
+}
+
+export const recommendMenu = async (
+  message: string,
+  menu: MenuSuggestion[],
+  budget?: number,
+): Promise<MenuChatResult> => {
+  const prompt = `
+Eres el asistente de un restaurante. Recomienda usando exclusivamente los productos del menú proporcionado.
+
+El cliente dijo:
+${message}
+
+${budget === undefined
+    ? "No se detectó un presupuesto claro. Si el cliente no indicó cuánto desea gastar, pregúntaselo y no recomiendes productos todavía."
+    : `Presupuesto total disponible: ₡${budget}. No lo excedas.`}
+
+El menú contiene el nombre, la categoría y la descripción de cada producto.
+Usa esos datos para decidir a qué momento de comida corresponde cada producto.
+
+Reglas:
+- Si el cliente pide desayuno, recomienda como comida un producto que por su categoría, nombre o descripción corresponda a desayuno.
+- Si pide almuerzo o cena, recomienda una comida apropiada para ese momento.
+- No uses una bebida o un postre como sustituto de la comida principal.
+- No recomiendes un producto de otra categoría solo para llenar la respuesta.
+- Devuelve como máximo una comida, una bebida y un postre.
+- La comida es obligatoria. La bebida y el postre son opcionales.
+- Incluye bebida o postre únicamente si existen en el menú y el total no supera el presupuesto.
+- Si no existe una comida apropiada o no cabe en el presupuesto, devuelve recommendations como una lista vacía y explícalo en reply.
+- No inventes nombres, precios ni identificadores.
+- En recommendations, copia el productId exacto del menú.
+- role debe ser "meal", "drink" o "dessert".
+- Devuelve únicamente JSON válido con este formato:
+{
+  "reply": "mensaje para el cliente",
+  "recommendations": [
+    {
+      "productId": 1,
+      "role": "meal",
+      "reason": "motivo breve"
+    }
+  ]
+}
+
+Menú:
+${JSON.stringify(menu)}
+`;
+
+const controller = new AbortController();
+
+const timeout = setTimeout(() => {
+  controller.abort();
+}, 8000);
+
+try {
+  const response = await gemini.models.generateContent({
+    model: "gemini-3.5-flash-lite",
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      abortSignal: controller.signal,
+    },
+  });
+
+  if (!response.text) {
+    throw new Error("Gemini no respondió");
+  }
+
+  return JSON.parse(response.text);
+} catch (error) {
+  clearTimeout(timeout);
+
+  if (!openai) {
+    throw new Error("Gemini falló y no hay una clave de OpenAI configurada");
+  }
+
+  const response = await openai.responses.create({
+    model: "gpt-5-mini",
+    input: prompt,
+  });
+
+  if (!response.output_text) {
+    throw new Error("OpenAI tampoco devolvió una respuesta");
+  }
+
+  return JSON.parse(response.output_text);
+}
 };

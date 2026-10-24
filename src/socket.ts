@@ -10,7 +10,7 @@ import { verifyToken } from "./utils/jwt";
 import db from "./db/connection";
 import { users } from "./db/schemas/userSchema";
 
-const STAFF_ROOM = "staff";
+const staffRoom = (businessId: number) => `staff:${businessId}`;
 const STAFF_ROLE_IDS = [2, 3, 4]; 
 const AUTH_COOKIE_NAME = "token";
 
@@ -74,12 +74,15 @@ export const initSocket = (server: HttpServer) => {
   io.on("connection", (socket) => {
 
 
-     const user = socket.data.user;
-    if (user && STAFF_ROLE_IDS.includes(user.roleId)) {
-      socket.join(STAFF_ROOM);
-      console.log("staff conectado:", user.userId, "rol", user.roleId); 
-    }
-
+    const user = socket.data.user;
+if (
+  user &&
+  STAFF_ROLE_IDS.includes(user.roleId) &&
+  user.businessId != null
+) {
+  socket.join(staffRoom(user.businessId));
+  console.log("staff conectado:", user.userId, "rol", user.roleId, "negocio", user.businessId);
+}
 
 
     socket.on("join_table", (payload, ack) => {
@@ -139,26 +142,31 @@ export const emitToTable = (
   io?.to(room(tableId)).emit(event, payload);
 };
 
-export const emitToStaff = (event: string, payload: unknown) => {
-  io?.to(STAFF_ROOM).emit(event, payload);
+export const emitToStaff = (
+  businessId: number,
+  event: string,
+  payload: unknown,
+) => {
+  io?.to(staffRoom(businessId)).emit(event, payload);
 };
+
 
 export const emitOrderChanged = (order: {
   order_id: number;
   table_id: string;
   state: string;
+  business_id: number;
 }) => {
   const payload = {
     orderId: order.order_id,
     tableId: order.table_id,
     state: order.state,
   };
-  emitToTable(order.table_id, "order_status_updated", payload); 
-  emitToStaff("kitchen_orders_updated", payload);       
-  emitToStaff("waiter_orders_updated", payload);              
-  emitToStaff("cashier_orders_updated", payload);  
+  emitToTable(order.table_id, "order_status_updated", payload);
+  emitToStaff(order.business_id, "kitchen_orders_updated", payload);
+  emitToStaff(order.business_id, "waiter_orders_updated", payload);
+  emitToStaff(order.business_id, "cashier_orders_updated", payload);
 };
-
 
 
 
