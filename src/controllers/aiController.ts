@@ -109,7 +109,7 @@ const menuChatBodySchema = z.object({
 
 const extractBudget = (message: string): number | undefined => {
   const match = message.match(
-    /(?:presupuesto|tengo|puedo gastar|quiero gastar|cuento con|dispongo de)[^0-9₡]{0,20}₡?\s*([\d.,]+)\s*(mil|k)?/i,
+    /(?:presupuesto|tengo|puedo gastar|quiero gastar|cuento con|dispongo de|traigo)[^0-9₡]{0,20}₡?\s*([\d.,]+)\s*(mil|k)?/i,
   );
 
   if (!match) return undefined;
@@ -206,60 +206,62 @@ export const createMenuChat = async (
         description: product.description ?? "",
         categoryName: product.categoryName,
         price: finalPrice,
+        originalPrice,
+        discount,
       };
     });
 
     const aiResult = await recommendMenu(message, menu, finalBudget);
 
-const validItems = aiResult.recommendations
-  .map((recommendation) => {
-    const product = menu.find(
-      (item) => item.productId === recommendation.productId,
-    );
+    const validItems = aiResult.recommendations
+      .map((recommendation) => {
+        const product = menu.find(
+          (item) => item.productId === recommendation.productId,
+        );
 
-    if (!product) return null;
+        if (!product) return null;
 
-    return {
-      ...product,
-      role: recommendation.role,
-      reason: recommendation.reason,
-    };
-  })
-  .filter((item) => item !== null);
+        return {
+          ...product,
+          role: recommendation.role,
+          reason: recommendation.reason,
+        };
+      })
+      .filter((item) => item !== null);
 
-const meal = validItems.find((item) => item.role === "meal");
+    const meal = validItems.find((item) => item.role === "meal");
 
-if (!meal || (finalBudget !== undefined && meal.price > finalBudget)) {
-  return res.status(200).json({
-    reply: "No encontré una comida adecuada dentro de tu presupuesto en este momento.",
-    recommendations: [],
-  });
-}
+    if (!meal || (finalBudget !== undefined && meal.price > finalBudget)) {
+      return res.status(200).json({
+        reply: "No encontré una comida adecuada dentro de tu presupuesto en este momento.",
+        recommendations: [],
+      });
+    }
 
-const recommendations = [meal];
-let remainingBudget =
-  finalBudget === undefined
-    ? Number.POSITIVE_INFINITY
-    : finalBudget - meal.price;
+    const recommendations = [meal];
+    let remainingBudget =
+      finalBudget === undefined
+        ? Number.POSITIVE_INFINITY
+        : finalBudget - meal.price;
 
-for (const role of ["drink", "dessert"] as const) {
-  const product = validItems.find((item) => item.role === role);
+    for (const role of ["drink", "dessert"] as const) {
+      const product = validItems.find((item) => item.role === role);
 
-  if (product && product.price <= remainingBudget) {
-    recommendations.push(product);
-    remainingBudget -= product.price;
+      if (product && product.price <= remainingBudget) {
+        recommendations.push(product);
+        remainingBudget -= product.price;
+      }
+    }
+
+    return res.status(200).json({
+      reply: aiResult.reply,
+      recommendations,
+    });
+  } catch (error) {
+    console.error("Error en el chat del menú:", error);
+
+    return res.status(500).json({
+      message: "No se pudo obtener una recomendación en este momento.",
+    });
   }
-}
-
-return res.status(200).json({
-  reply: aiResult.reply,
-  recommendations,
-});
-} catch (error) {
-  console.error("Error en el chat del menú:", error);
-
-  return res.status(500).json({
-    message: "No se pudo obtener una recomendación en este momento.",
-  });
-}
 };
