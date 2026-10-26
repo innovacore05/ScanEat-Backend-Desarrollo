@@ -62,3 +62,26 @@ export const upload = multer({
         }
     },
 });
+
+
+
+export const uploadInvoice = multer({
+  storage: multer.memoryStorage(),
+
+  limits: {
+    fileSize: 5 * 1024 * 1024, // Máximo 5 MB
+    files: 1,
+  },
+
+  fileFilter: (_req, file, cb) => {
+    const isPdf =
+      file.mimetype === "application/pdf" &&
+      path.extname(file.originalname).toLowerCase() === ".pdf";
+
+    if (isPdf) {
+      cb(null, true);
+    } else {
+      cb(new Error("Solo se permiten facturas en formato PDF"));
+    }
+  },
+});

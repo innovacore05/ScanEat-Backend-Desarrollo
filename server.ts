@@ -17,6 +17,7 @@ import billingRoutes from "./src/routes/billingRoutes";
 import aiRoutes from "./src/routes/aiRoutes";
 import multer from "multer";
 import sharedCartRoutes from "./src/routes/sharedCartRoutes";
+import expensesRoutes from "./src/routes/expensesRoutes";
 
 
 
@@ -36,6 +37,7 @@ app.use("/api/public", publicThemeRoutes);
 app.use("/api/billing", billingRoutes);
 app.use("/api/ai", aiRoutes);
 app.use("/api/shared-carts", sharedCartRoutes);
+app.use("/api/expenses", expensesRoutes);
 
 app.use('/api', (req, res) =>{
     res.status(404).json({ message: 'Endpoint not found' });

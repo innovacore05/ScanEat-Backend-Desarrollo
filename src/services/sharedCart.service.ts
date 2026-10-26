@@ -9,7 +9,7 @@ import {
   roundCurrency,
   type ProductPricingData,
 } from "./orderPricing.service";
-import { emitToTable } from "../socket";
+import { emitToTable,emitOrderChanged } from "../socket";
 import { createOrderFromCart } from "./orderCreation.service";
 
 //limites del carrito, tiempo e 60 m y max de productos 
@@ -167,7 +167,7 @@ const broadcast = async (cart: Cart) => {
 
 
 export const submitCart = async (tableId: string, observation?: string | null) => {
-  const { cart, order } = await db.transaction(async (tx) => {
+ const { cart, order, businessId } = await db.transaction(async (tx) => {
     // Bloquea el carrito
     const [cart] = await tx
       .select()
@@ -181,6 +181,13 @@ export const submitCart = async (tableId: string, observation?: string | null) =
 
     const { rows, lines } = await loadCartLines(tx, cart.id);
     if (rows.length === 0) throw new CartError(400, "El carrito está vacío");
+
+    const [table] = await tx
+  .select({ businessId: tables.businessId })
+  .from(tables)
+  .where(eq(tables.id, tableId))
+  .limit(1);
+if (!table) throw new CartError(404, "Mesa no encontrada");
 
     const order = await createOrderFromCart(
       tx,
@@ -199,23 +206,28 @@ export const submitCart = async (tableId: string, observation?: string | null) =
       })
       .where(eq(sharedCarts.id, cart.id));
 
-    return { cart, order };
+    return { cart, order, businessId: table.businessId };
   });
 
-  try {
+     try {
     emitToTable(tableId, "cart:submitted", {
       tableId,
       cartId: cart.id,
       orderId: order.orderId,
     });
+
+    emitOrderChanged({
+  order_id: order.orderId,
+  table_id: tableId,
+  state: orderStatuses.pending,
+  business_id: businessId,
+});
   } catch (e) {
     console.error("No se pudo emitir cart:submitted:", e);
   }
 
   return order;
 };
-
-
 
 export const getCartState = async (tableId: string) => {
   const cart = await findOpenCart(tableId);
