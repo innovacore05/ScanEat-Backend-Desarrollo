@@ -1,4 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
+import OpenAI from "openai";
 import { z } from "zod";
 
 const apiKey = process.env.GEMINI_API_KEY;
@@ -10,6 +11,14 @@ if (!apiKey) {
 export const gemini = new GoogleGenAI({
   apiKey,
 });
+
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+      timeout: 10000,
+      maxRetries: 0,
+    })
+  : null;
 
 //Este es el tipo de datos que se envía a Gemini para generar el reporte de ventas.
 // Contiene el periodo de tiempo, un resumen de las ventas, el producto más vendido, las horas pico y los pedidos cancelados.
@@ -190,4 +199,141 @@ export const moderateReview = async (
   }
 
   return parsed.data;
+};
+
+export type MenuSuggestion = {
+  productId: number;
+  productName: string;
+  description: string;
+  categoryName: string;
+  price: number; // precio final, con descuento aplicado
+  originalPrice: number;
+  discount: number;
+};
+
+export type MenuRole = "meal" | "drink" | "dessert";
+
+export type MenuChatResult = {
+  reply: string;
+  recommendations: {
+    productId: number;
+    role: MenuRole;
+    reason: string;
+  }[];
+};
+
+function esperar<T>(promesa: Promise<T>, milisegundos: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const temporizador = setTimeout(() => {
+      reject(new Error("Gemini tardó demasiado"));
+    }, milisegundos);
+
+    promesa.then(
+      (resultado) => {
+        clearTimeout(temporizador);
+        resolve(resultado);
+      },
+      (error) => {
+        clearTimeout(temporizador);
+        reject(error);
+      },
+    );
+  });
+}
+
+export const recommendMenu = async (
+  message: string,
+  menu: MenuSuggestion[],
+  budget?: number,
+): Promise<MenuChatResult> => {
+  const prompt = `
+Eres el asistente de un restaurante. Recomienda usando exclusivamente los productos del menú proporcionado.
+
+El cliente dijo:
+${message}
+
+${budget === undefined
+    ? "No se detectó un presupuesto claro. Si el cliente no indicó cuánto desea gastar, pregúntaselo y no recomiendes productos todavía."
+    : `Presupuesto total disponible: ₡${budget}. No lo excedas.`}
+
+El menú contiene el nombre, la categoría y la descripción de cada producto.
+Usa esos datos para decidir a qué momento de comida corresponde cada producto.
+
+Reglas:
+- Si el cliente pide desayuno, recomienda como comida un producto que por su categoría, nombre o descripción corresponda a desayuno.
+- Si el cliente pide almuerzo, recomienda como comida un producto que por su categoría, nombre o descripción corresponda a almuerzo.
+- Si el cliente pide cena, recomienda como comida un producto que por su categoría, nombre o descripción corresponda a cena.
+- si hay platillos en descuento, recomiéndalos si son apropiados para la comida solicitada y no exceden el presupuesto.
+- El campo "price" es el precio final que paga el cliente y ya incluye el descuento.
+- "originalPrice" es el precio antes del descuento.
+- "discount" es el porcentaje de descuento.
+- Para respetar el presupuesto, calcula los totales usando "price", nunca "originalPrice".
+- Si dos productos son igual de apropiados, puedes priorizar el que tenga descuento.
+- Si pide almuerzo o cena, recomienda una comida apropiada para ese momento.
+- No uses una bebida o un postre como sustituto de la comida principal.
+- No recomiendes un producto de otra categoría solo para llenar la respuesta.
+- Devuelve como minimo una comida, una bebida y un postre.
+- puedes recomendar varios combos de comida, bebida y postre, siempre que no excedan el presupuesto.
+- La comida es obligatoria, si es posible la bebida tambien. El postre es opcional.
+- Incluye postre únicamente si existen en el menú y el total no supera el presupuesto.
+- Si no existe una comida apropiada o no cabe en el presupuesto, devuelve un mensaje explicativo diciendo por qué no se puede recomendar nada.
+- No inventes nombres, precios ni identificadores.
+-
+- En recommendations, copia el productId exacto del menú.
+- role debe ser "meal", "drink" o "dessert".
+- Devuelve únicamente JSON válido con este formato:
+{
+  "reply": "mensaje para el cliente",
+  "recommendations": [
+    {
+      "productId": 1,
+      "role": "meal",
+      "reason": "motivo breve"
+    }
+  ]
+}
+
+Menú:
+${JSON.stringify(menu)}
+`;
+
+const controller = new AbortController();
+
+const timeout = setTimeout(() => {
+  controller.abort();
+}, 8000);
+
+try {
+  const response = await gemini.models.generateContent({
+    model: "gemini-3.5-flash-lite",
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      abortSignal: controller.signal,
+    },
+  });
+
+  if (!response.text) {
+    throw new Error("Gemini no respondió");
+  }
+
+  return JSON.parse(response.text);
+} catch (error) {
+  clearTimeout(timeout);
+
+  if (!openai) {
+    throw new Error("Gemini falló y no hay una clave de OpenAI configurada");
+  }
+
+  const response = await openai.responses.create({
+    model: "gpt-5-mini",
+    input: prompt,
+  });
+
+  if (!response.output_text) {
+    throw new Error("OpenAI tampoco devolvió una respuesta");
+  }
+
+  return JSON.parse(response.output_text);
+}
 };

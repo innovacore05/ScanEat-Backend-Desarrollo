@@ -30,9 +30,10 @@ const token=req.cookies?.token;
 
     // const token = authHeader.slice(7).trim();
  
-if(!token){
+if (!token) {
   return res.status(401).json({
-    message:"Token required",
+    code: "SESSION_EXPIRED",
+    message: "No encontramos tu sesión. Vuelve a iniciar sesión.",
   });
 }
     const payload = await verifyToken(token);
@@ -48,20 +49,21 @@ if(!token){
       .where(eq(users.user_id, payload.user_id))
       .limit(1);
 
-    if (!user) {
-      return res.status(401).json({
-        message: "User not found",
-      });
-    }
-
+if (!user) {
+  return res.status(401).json({
+    code: "SESSION_EXPIRED",
+    message: "No encontramos tu sesión. Vuelve a iniciar sesión.",
+  });
+}
     req.user = user;
     console.log("AUTH USER:", user);
     next();
   } catch {
-    return res.status(401).json({
-      message: "Invalid token",
-    });
-  }
+  return res.status(401).json({
+    code: "SESSION_EXPIRED",
+    message: "No encontramos tu sesión. Vuelve a iniciar sesión.",
+  });
+}
 };
 
 export const optionalAuthenticate = async (
@@ -107,11 +109,13 @@ if(!token){
 };
 export const requireRole = (...allowedRoles: number[]) => {
   return (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user) {
-      return res.status(401).json({
-        message: "Authentication required",
-      });
-    }
+    
+  if (!req.user) {
+  return res.status(401).json({
+    code: "SESSION_EXPIRED",
+    message: "No encontramos tu sesión. Vuelve a iniciar sesión.",
+  });
+}
 
     if (!allowedRoles.includes(req.user.role_id)) {
       return res.status(403).json({
