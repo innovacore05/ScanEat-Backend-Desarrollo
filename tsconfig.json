@@ -11,6 +11,6 @@
         "resolveJsonModule": true,
          "types": ["node", "multer"]
     },
-    "include": ["src/**/*", "server.ts", "drizzle.config.ts"],
+    "include": ["src/**/*", "server.ts", "drizzle.config.ts", "migrateBusinessCodes.ts"],
     "exclude": ["node_modules", "dist"]
 }
