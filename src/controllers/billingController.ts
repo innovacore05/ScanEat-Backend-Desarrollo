@@ -1,5 +1,5 @@
 import { Response } from "express";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { AuthRequest } from "../middleware/authenticate";
 import db from "../db/connection";
@@ -10,7 +10,7 @@ import { products } from "../db/schemas/adminMenuSchema";
 import { payments, receiptDetails, receiptTaxes, receipts } from "../db/schemas/billingSchema";
 
 import { sharedCarts } from "../db/schemas/sharedCartSchema";
-import { emitToTable,emitOrderChanged } from "../socket";
+import { emitToTable, emitOrderChanged } from "../socket";
 
 const roundCurrency = (value: number) =>
   Math.round((value + Number.EPSILON) * 100) / 100;
@@ -86,6 +86,44 @@ const buildLines = (rows: LineRow[]) =>
       total: total.toFixed(2),
     };
   });
+
+
+const buildPartialLines = (
+  lines: BuiltLine[],
+  selectedItems: { detailId: number; quantity: number }[],
+) => {
+  const selectedQuantities = new Map(
+    selectedItems.map((item) => [item.detailId, item.quantity]),
+  );
+
+  return lines
+    .filter((line) => selectedQuantities.has(line.detailId))
+    .map((line) => {
+      const quantity = selectedQuantities.get(line.detailId)!;
+      const unitPrice = Number(line.unitPrice);
+      const discountPerUnit =
+        Number(line.discount) / line.quantity;
+
+      const gross = roundCurrency(unitPrice * quantity);
+      const discount = roundCurrency(discountPerUnit * quantity);
+      const subtotal = roundCurrency(gross - discount);
+      const tax = roundCurrency(
+        subtotal * (Number(line.ivaRate) / 100),
+      );
+      const total = roundCurrency(subtotal + tax);
+
+      return {
+        ...line,
+        quantity,
+        gross: gross.toFixed(2),
+        discount: discount.toFixed(2),
+        subtotal: subtotal.toFixed(2),
+        tax: tax.toFixed(2),
+        total: total.toFixed(2),
+      };
+    });
+};
+
 
 type BuiltLine = ReturnType<typeof buildLines>[number];
 
@@ -166,7 +204,7 @@ export const getPaymentPreview = async (
           eq(orders.orderId, orderId),
           eq(tables.businessId, businessId),
         ),
-      );
+      ).for("update", { of: orders });
     if (rows.length === 0) {
       return res.status(404).json({ message: "Orden no encontrada" });
     }
@@ -195,17 +233,28 @@ export const getPaymentPreview = async (
       });
     }
 
-    const lines = buildLines(rows);
+    const paidQuantities = await getPaidQuantities(orderId);
+
+    const lines = buildLines(rows).map((line) => {
+      const paidQuantity = paidQuantities.get(line.detailId) ?? 0;
+
+      return {
+        ...line,
+        originalQuantity: line.quantity,
+        paidQuantity,
+        pendingQuantity: Math.max(0, line.quantity - paidQuantity),
+      };
+    });
 
     return res.status(200).json({
-  orderId: firstRow.order.orderId,
-  tableId: firstRow.order.tableId,
-  tableNumber: firstRow.table.tableNumber,
-  lines,
-  totals: buildTotals(lines),
-  taxSummary: buildTaxSummary(lines),
-  missingCabys: [],
-});
+      orderId: firstRow.order.orderId,
+      tableId: firstRow.order.tableId,
+      tableNumber: firstRow.table.tableNumber,
+      lines,
+      totals: buildTotals(lines),
+      taxSummary: buildTaxSummary(lines),
+      missingCabys: [],
+    });
 
 
   } catch (error) {
@@ -217,16 +266,30 @@ export const getPaymentPreview = async (
   }
 };
 
+
 const payOrderSchema = z.union([
   z.object({
     method: z.literal("cash"),
     amountTendered: z.coerce.number().positive(),
+    items: z.array(
+      z.object({
+        detailId: z.number().int().positive(),
+        quantity: z.number().int().positive(),
+      }),
+    ).min(1),
   }),
   z.object({
     method: z.enum(["card", "sinpe"]),
     reference: z.string().trim().min(1).max(50),
+    items: z.array(
+      z.object({
+        detailId: z.number().int().positive(),
+        quantity: z.number().int().positive(),
+      }),
+    ).min(1),
   }),
 ]);
+
 
 const METHOD_CODES = { cash: "01", card: "02", sinpe: "06" } as const;
 
@@ -299,8 +362,73 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         return { type: "not-payable" as const };
       }
 
-      // lineas y totales salen de la misma fuente, y de aqui sale TODO
-      const lines = buildLines(rows);
+
+
+      const paidRows = await tx
+        .select({
+          orderDetailId: receiptDetails.orderDetailId,
+          paidQuantity: sql<string>`COALESCE(SUM(${receiptDetails.quantity}), 0)`,
+        })
+        .from(receiptDetails)
+        .innerJoin(
+          receipts,
+          eq(receiptDetails.receiptId, receipts.receiptId),
+        )
+        .where(eq(receipts.orderId, orderId))
+        .groupBy(receiptDetails.orderDetailId);
+
+      const paidQuantities = new Map(
+        paidRows
+          .filter((row) => row.orderDetailId !== null)
+          .map((row) => [
+            row.orderDetailId as number,
+            Number(row.paidQuantity),
+          ]),
+      );
+
+      const selectedItems = new Map(
+        payload.items.map((item) => [item.detailId, item.quantity]),
+      );
+
+      const hasDuplicateItems =
+        selectedItems.size !== payload.items.length;
+
+      const hasInvalidQuantity =
+        hasDuplicateItems ||
+        payload.items.some((item) => {
+          const originalLine = rows.find(
+            (row) => row.detail.detailId === item.detailId,
+          );
+
+          if (!originalLine) return true;
+
+          const alreadyPaid =
+            paidQuantities.get(item.detailId) ?? 0;
+
+          const pending =
+            Number(originalLine.detail.quantity) - alreadyPaid;
+
+          return item.quantity > pending;
+        });
+
+      if (hasInvalidQuantity) {
+        return { type: "invalid-quantity" as const };
+      }
+
+      // Construir únicamente las líneas seleccionadas para este cobro.
+      const allLines = buildLines(rows);
+
+      const selectedItemsArray = payload.items;
+
+      const lines = buildPartialLines(
+        allLines,
+        selectedItemsArray,
+      );
+
+      if (lines.length === 0) {
+        return { type: "invalid-quantity" as const };
+      }
+
       const totals = buildTotals(lines);
       const taxSummary = buildTaxSummary(lines);
       const total = Number(totals.totalSale);
@@ -310,34 +438,66 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         return { type: "insufficient" as const };
       }
 
-      
-      // "reclama" la orden: si otro cobro ya la tomo, no devuelve filas
-      const [claimed] = await tx
-        .update(orders)
-        .set({
-          state: orderStatuses.paid,
-          paidAt: new Date(),
-        }).where(
-          and(
-            eq(orders.orderId, orderId),
-            eq(orders.state, orderStatuses.delivered),
-            isNull(orders.paidAt),
-          ),
-        )
-        .returning({ orderId: orders.orderId });
 
-      if (!claimed) {
-        return { type: "not-payable" as const };
+      // "reclama" la orden: si otro cobro ya la tomo, no devuelve filas
+
+      // Comprobar si este cobro completa todas las cantidades de la orden.
+      const allQuantitiesPaid = rows.every((row) => {
+        const alreadyPaid =
+          paidQuantities.get(row.detail.detailId) ?? 0;
+
+        const selectedQuantity =
+          selectedItems.get(row.detail.detailId) ?? 0;
+
+        return (
+          alreadyPaid + selectedQuantity >=
+          Number(row.detail.quantity)
+        );
+      });
+
+      // Solo marcar como pagada si no quedan unidades pendientes.
+      if (allQuantitiesPaid) {
+        const [claimed] = await tx
+          .update(orders)
+          .set({
+            state: orderStatuses.paid,
+            paidAt: new Date(),
+          })
+          .where(
+            and(
+              eq(orders.orderId, orderId),
+              eq(orders.state, orderStatuses.delivered),
+              isNull(orders.paidAt),
+            ),
+          )
+          .returning({ orderId: orders.orderId });
+
+        if (!claimed) {
+          return { type: "not-payable" as const };
+        }
       }
 
-   const cancelledCarts = await tx
-        .update(sharedCarts)
-        .set({ status: "cancelled", updatedAt: new Date() })
-        .where(and(eq(sharedCarts.tableId, order.tableId), eq(sharedCarts.status, "open")))
-        .returning({ id: sharedCarts.id });
 
 
-      
+      const cancelledCarts = allQuantitiesPaid
+        ? await tx
+          .update(sharedCarts)
+          .set({
+            status: "cancelled",
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(sharedCarts.tableId, order.tableId),
+              eq(sharedCarts.status, "open"),
+            ),
+          )
+          .returning({ id: sharedCarts.id })
+        : [];
+
+
+
+
       const [receipt] = await tx
         .insert(receipts)
         .values({
@@ -406,6 +566,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         cashierId,
       });
 
+
       return {
         type: "paid" as const,
         receipt,
@@ -414,8 +575,10 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         totals,
         taxSummary,
         change,
-       cancelledCartIds: cancelledCarts.map((cart) => cart.id),
+        allQuantitiesPaid,
+        cancelledCartIds: cancelledCarts.map((cart) => cart.id),
       };
+
     });
 
     if (result.type === "not-found") {
@@ -434,6 +597,13 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         .json({ message: "La orden no está pendiente de cobro" });
     }
 
+    if (result.type === "invalid-quantity") {
+      return res.status(409).json({
+        message:
+          "Una o más cantidades seleccionadas ya fueron cobradas " +
+          "o superan las unidades pendientes.",
+      });
+    }
 
     if (result.type === "missing-fiscal") {
       return res.status(409).json({
@@ -443,18 +613,28 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
       });
     }
 
-  const { receipt, table, lines, totals, taxSummary, change, cancelledCartIds } = result;
+    const { receipt, table, lines, totals, taxSummary, change, cancelledCartIds } = result;
 
-for (const cartId of cancelledCartIds) {
-  emitToTable(table.id, "cart:expired", { cartId });
-}
+    for (const cartId of cancelledCartIds) {
+      emitToTable(table.id, "cart:expired", { cartId });
+    }
 
-    emitOrderChanged({
-  order_id: orderId,
-  table_id: table.id,
-  state: orderStatuses.paid,
-  business_id: table.businessId,
-});
+    if (result.allQuantitiesPaid) {
+      emitOrderChanged({
+        order_id: orderId,
+        table_id: table.id,
+        state: orderStatuses.paid,
+        business_id: table.businessId,
+      });
+    } else {
+      emitOrderChanged({
+        order_id: orderId,
+        table_id: table.id,
+        state: orderStatuses.delivered,
+        business_id: table.businessId,
+      });
+    }
+
 
     return res.status(201).json({
       receiptId: receipt.receiptId,
@@ -480,4 +660,31 @@ for (const cartId of cancelledCartIds) {
 
     return res.status(500).json({ message: "No se pudo registrar el cobro" });
   }
+};
+
+
+const getPaidQuantities = async (
+  orderId: number,
+) => {
+  const rows = await db
+    .select({
+      orderDetailId: receiptDetails.orderDetailId,
+      paidQuantity: sql<string>`COALESCE(SUM(${receiptDetails.quantity}), 0)`,
+    })
+    .from(receiptDetails)
+    .innerJoin(
+      receipts,
+      eq(receiptDetails.receiptId, receipts.receiptId),
+    )
+    .where(eq(receipts.orderId, orderId))
+    .groupBy(receiptDetails.orderDetailId);
+
+  return new Map(
+    rows
+      .filter((row) => row.orderDetailId !== null)
+      .map((row) => [
+        row.orderDetailId as number,
+        Number(row.paidQuantity),
+      ]),
+  );
 };

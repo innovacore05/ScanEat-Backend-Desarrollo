@@ -5,10 +5,16 @@ import { businesses } from "../db/schemas/userSchema";
 import { db } from "../db/connection";
 import { eq } from "drizzle-orm";
 import { randomInt } from "node:crypto";
+import {
+    hashBusinessCode,
+    encryptBusinessCode,
+} from "../utils/businessCode";
 
 export const createBusiness = async (req: AuthRequest, res: Response) => {
     try {
         const { name, email, number, code } = req.body;
+        const codeHash = hashBusinessCode(code);
+        const codeEncrypted = encryptBusinessCode(code);
 
         const adminId = req.user?.user_id;
 
@@ -35,7 +41,7 @@ export const createBusiness = async (req: AuthRequest, res: Response) => {
                 businessId: businesses.business_id,
             })
             .from(businesses)
-            .where(eq(businesses.code, code))
+            .where(eq(businesses.code, codeHash))
             .limit(1);
 
         if (existingCode) {
@@ -50,7 +56,8 @@ export const createBusiness = async (req: AuthRequest, res: Response) => {
                 name,
                 email,
                 number,
-                code,
+                code: codeHash,
+                codeEncrypted: codeEncrypted,
                 admin_id: adminId,
             })
             .returning();
@@ -64,9 +71,15 @@ export const createBusiness = async (req: AuthRequest, res: Response) => {
 
         return res.status(201).json({
             message: "Negocio creado correctamente",
-            business,
+            business: {
+                business_id: business.business_id,
+                name: business.name,
+                email: business.email,
+                number: business.number,
+                code: code.trim().toUpperCase(),
+                admin_id: business.admin_id,
+            },
         });
-
     } catch (error: unknown) {
         console.error("Error al crear negocio:", error);
 
@@ -196,12 +209,14 @@ export const generateBusinessCode = async (
                 code += randomInt(10).toString();
             }
 
+            const codeHash = hashBusinessCode(code);
+
             const [existingCode] = await db
                 .select({
                     businessId: businesses.business_id,
                 })
                 .from(businesses)
-                .where(eq(businesses.code, code))
+                .where(eq(businesses.code, codeHash))
                 .limit(1);
 
             if (!existingCode) {
