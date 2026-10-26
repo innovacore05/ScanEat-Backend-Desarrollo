@@ -206,7 +206,9 @@ export type MenuSuggestion = {
   productName: string;
   description: string;
   categoryName: string;
-  price: number;
+  price: number; // precio final, con descuento aplicado
+  originalPrice: number;
+  discount: number;
 };
 
 export type MenuRole = "meal" | "drink" | "dessert";
@@ -259,14 +261,24 @@ Usa esos datos para decidir a qué momento de comida corresponde cada producto.
 
 Reglas:
 - Si el cliente pide desayuno, recomienda como comida un producto que por su categoría, nombre o descripción corresponda a desayuno.
+- Si el cliente pide almuerzo, recomienda como comida un producto que por su categoría, nombre o descripción corresponda a almuerzo.
+- Si el cliente pide cena, recomienda como comida un producto que por su categoría, nombre o descripción corresponda a cena.
+- si hay platillos en descuento, recomiéndalos si son apropiados para la comida solicitada y no exceden el presupuesto.
+- El campo "price" es el precio final que paga el cliente y ya incluye el descuento.
+- "originalPrice" es el precio antes del descuento.
+- "discount" es el porcentaje de descuento.
+- Para respetar el presupuesto, calcula los totales usando "price", nunca "originalPrice".
+- Si dos productos son igual de apropiados, puedes priorizar el que tenga descuento.
 - Si pide almuerzo o cena, recomienda una comida apropiada para ese momento.
 - No uses una bebida o un postre como sustituto de la comida principal.
 - No recomiendes un producto de otra categoría solo para llenar la respuesta.
-- Devuelve como máximo una comida, una bebida y un postre.
-- La comida es obligatoria. La bebida y el postre son opcionales.
-- Incluye bebida o postre únicamente si existen en el menú y el total no supera el presupuesto.
-- Si no existe una comida apropiada o no cabe en el presupuesto, devuelve recommendations como una lista vacía y explícalo en reply.
+- Devuelve como minimo una comida, una bebida y un postre.
+- puedes recomendar varios combos de comida, bebida y postre, siempre que no excedan el presupuesto.
+- La comida es obligatoria, si es posible la bebida tambien. El postre es opcional.
+- Incluye postre únicamente si existen en el menú y el total no supera el presupuesto.
+- Si no existe una comida apropiada o no cabe en el presupuesto, devuelve un mensaje explicativo diciendo por qué no se puede recomendar nada.
 - No inventes nombres, precios ni identificadores.
+-
 - En recommendations, copia el productId exacto del menú.
 - role debe ser "meal", "drink" o "dessert".
 - Devuelve únicamente JSON válido con este formato:
