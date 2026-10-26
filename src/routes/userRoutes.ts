@@ -21,3 +21,7 @@ router.patch("/:id",authenticate,requireRole(1),validateParams(userParamsSchema)
 router.delete("/:id",authenticate,requireRole(1),validateParams(userParamsSchema),deleteUser,);
 
 export default router;
+
+
+
+//actualziacion
