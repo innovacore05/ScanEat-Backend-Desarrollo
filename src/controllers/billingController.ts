@@ -7,7 +7,7 @@ import { orderDetails,orders,orderStatuses } from "../db/schemas/orderSchema";
 import { tables } from "../db/schemas/mesaSchema";  
 import { products } from "../db/schemas/adminMenuSchema";   
 
-import  {payments, receiptDetails, receiptTaxes,receipts } from "../db/schemas/billingSchema";
+import  {invoicingConfig,payments, receiptDetails, receiptTaxes,receipts } from "../db/schemas/billingSchema";
 
 
 
@@ -54,6 +54,42 @@ const findMissingFiscalLine = (rows: LineRow[]) =>
     );
   });
 
+type IssuerRow=typeof invoicingConfig.$inferSelect;
+
+
+const REQUIRED_ISSUER_FIELDS: Array<[keyof IssuerRow, string]> = [
+  ["legalIdType", "tipo de identificación"],
+  ["legalId", "cédula"],
+  ["legalName", "nombre o razón social"],
+  ["activityCode", "actividad económica"],
+  ["email", "correo"],
+  ["phone", "teléfono"],
+  ["province", "provincia"],
+  ["canton", "cantón"],
+  ["district", "distrito"],
+  ["address", "dirección"],
+];
+
+const getIssuerProblem = (issuer: IssuerRow | undefined): string | null => {
+  if (!issuer) {
+    return "Falta configurar los datos fiscales del emisor.";
+  }
+
+  const missing = REQUIRED_ISSUER_FIELDS.filter(([key]) => !issuer[key]).map(
+    ([, label]) => label,
+  );
+
+  if (missing.length > 0) {
+    return `Faltan datos del emisor: ${missing.join(", ")}.`;
+  }
+
+ 
+  if (!issuer.certificateUploadedAt) {
+    return "El certificado del emisor no ha sido cargado en Factura en CR.";
+  }
+
+  return null;
+};
 
 
 const buildLines = (rows: LineRow[]) =>
@@ -194,6 +230,20 @@ export const getPaymentPreview = async (
       });
     }
 
+
+    const [issuer] = await db
+      .select()
+      .from(invoicingConfig)
+      .where(eq(invoicingConfig.businessId, businessId))
+      .limit(1);
+
+    const issuerProblem = getIssuerProblem(issuer);
+
+    if (issuerProblem) {
+      return res.status(409).json({ message: issuerProblem });
+    }
+
+
     const lines = buildLines(rows);
 
      return res.status(200).json({
@@ -297,6 +347,23 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         return { type: "not-payable" as const };
       }
 
+
+            const [issuer] = await tx
+        .select()
+        .from(invoicingConfig)
+        .where(eq(invoicingConfig.businessId, businessId))
+        .limit(1);
+
+      const issuerProblem = getIssuerProblem(issuer);
+
+      if (!issuer || issuerProblem) {
+        return {
+          type: "issuer-incomplete" as const,
+          message: issuerProblem ?? "Falta configurar los datos del emisor.",
+        };
+      }
+
+
  // lineas y totales salen de la misma fuente, y de aqui sale TODO
       const lines = buildLines(rows);
       const totals = buildTotals(lines);
@@ -333,6 +400,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
           businessId,
           orderId,
           documentType: "04", 
+           environment: issuer.environment,
           totalSale: totals.totalSale,
           totalDiscount: totals.totalDiscount,
           totalNetSale: totals.totalNetSale,
@@ -399,6 +467,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         type: "paid" as const,
         receipt,
         table,
+         issuer,
         lines,
         totals,
         taxSummary,
@@ -431,7 +500,12 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
       });
     }
 
-   const { receipt, table, lines, totals, taxSummary, change } = result;
+
+    if (result.type === "issuer-incomplete") {
+      return res.status(409).json({ message: result.message });
+    }
+
+   const { receipt, table, issuer, lines, totals, taxSummary, change } = result;
 
     return res.status(201).json({
       receiptId: receipt.receiptId,
@@ -440,6 +514,17 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
       documentType: receipt.documentType,
       issueDate: receipt.issueDate,
       haciendaStatus: receipt.haciendaStatus,
+      clave: receipt.clave,
+      consecutiveNumber: receipt.consecutiveNumber,
+      environment: receipt.environment,
+       issuer: {
+        legalName: issuer.legalName,
+        tradeName: issuer.tradeName,
+        legalId: issuer.legalId,
+        legalIdType: issuer.legalIdType,
+        phone: issuer.phone,
+        address: issuer.address,
+      },
       lines,
       totals,
       taxSummary,
