@@ -9,7 +9,13 @@ import {
   roundCurrency,
   type ProductPricingData,
 } from "./orderPricing.service";
-import { emitToTable,emitOrderChanged } from "../socket";
+import {
+  clearTableReadyState,
+  emitToTable,
+  emitOrderChanged,
+  getConnectedClientIds,
+  getTableReadyClientIds,
+} from "../socket";
 import { createOrderFromCart } from "./orderCreation.service";
 
 //limites del carrito, tiempo e 60 m y max de productos 
@@ -167,7 +173,20 @@ const broadcast = async (cart: Cart) => {
 
 
 export const submitCart = async (tableId: string, observation?: string | null) => {
- const { cart, order, businessId } = await db.transaction(async (tx) => {
+  const connectedClients = await getConnectedClientIds(tableId);
+  if (connectedClients.length > 0) {
+    const readyClients = new Set(getTableReadyClientIds(tableId));
+    const allReady = connectedClients.every((clientId) => readyClients.has(clientId));
+
+    if (!allReady) {
+      throw new CartError(
+        409,
+        "Todos los clientes de la mesa deben marcar que están listos antes de confirmar",
+      );
+    }
+  }
+
+  const { cart, order, businessId } = await db.transaction(async (tx) => {
     // Bloquea el carrito
     const [cart] = await tx
       .select()
@@ -183,11 +202,11 @@ export const submitCart = async (tableId: string, observation?: string | null) =
     if (rows.length === 0) throw new CartError(400, "El carrito está vacío");
 
     const [table] = await tx
-  .select({ businessId: tables.businessId })
-  .from(tables)
-  .where(eq(tables.id, tableId))
-  .limit(1);
-if (!table) throw new CartError(404, "Mesa no encontrada");
+      .select({ businessId: tables.businessId })
+      .from(tables)
+      .where(eq(tables.id, tableId))
+      .limit(1);
+    if (!table) throw new CartError(404, "Mesa no encontrada");
 
     const order = await createOrderFromCart(
       tx,
@@ -209,7 +228,8 @@ if (!table) throw new CartError(404, "Mesa no encontrada");
     return { cart, order, businessId: table.businessId };
   });
 
-     try {
+  try {
+    clearTableReadyState(tableId);
     emitToTable(tableId, "cart:submitted", {
       tableId,
       cartId: cart.id,
@@ -217,11 +237,11 @@ if (!table) throw new CartError(404, "Mesa no encontrada");
     });
 
     emitOrderChanged({
-  order_id: order.orderId,
-  table_id: tableId,
-  state: orderStatuses.pending,
-  business_id: businessId,
-});
+      order_id: order.orderId,
+      table_id: tableId,
+      state: orderStatuses.pending,
+      business_id: businessId,
+    });
   } catch (e) {
     console.error("No se pudo emitir cart:submitted:", e);
   }
