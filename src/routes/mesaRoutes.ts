@@ -5,6 +5,7 @@ import {
   getTableById,
   deleteTable,
   updateTableChairs,
+  activateTable,
 } from "../controllers/mesaController";
 import { validateBody, validateParams } from "../middleware/validations";
 import { authenticate, requireRole } from "../middleware/authenticate";
@@ -22,4 +23,5 @@ router.get("/:id", authenticate, validateParams(tableParamsSchema), getTableById
 router.put("/:id",authenticate,requireRole(1),validateParams(tableParamsSchema),validateBody(updateTableChairsSchema),updateTableChairs,);
 router.patch("/:id",authenticate,requireRole(1),validateParams(tableParamsSchema),validateBody(updateTableChairsSchema),updateTableChairs,);
 router.delete("/:id", authenticate, requireRole(1), validateParams(tableParamsSchema), deleteTable);
+router.patch("/:id/activate", authenticate, requireRole(1), validateParams(tableParamsSchema), activateTable);
 export default router;

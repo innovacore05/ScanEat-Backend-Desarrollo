@@ -65,7 +65,7 @@ if (!businessId) {
     const mesaList = await db
       .select()
       .from(tables)
-      .where(and(eq(tables.businessId, businessId), eq(tables.active, true)))
+      .where(eq(tables.businessId, businessId))
       .orderBy(tables.tableNumber);
 
     return res.status(200).json(mesaList);
@@ -191,7 +191,7 @@ if (!businessId) {
   }
 };
 
-//controller para eliminar una mesa
+//controller para desactivar una mesa
 export const deleteTable = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = tableParamsSchema.parse(req.params);
@@ -203,7 +203,7 @@ export const deleteTable = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    // la mesa no se puede eliminar si tiene una orden sin cobrar
+    // la mesa no se puede desactivar si tiene una orden sin cobrar
     const [activeOrder] = await db
       .select({ orderId: orders.orderId })
       .from(orders)
@@ -222,7 +222,7 @@ export const deleteTable = async (req: AuthRequest, res: Response) => {
 
     if (activeOrder) {
       return res.status(409).json({
-        message: "La mesa tiene una orden activa y no se puede eliminar",
+        message: "La mesa tiene una orden activa y no se puede desactivar",
       });
     }
 
@@ -246,13 +246,55 @@ export const deleteTable = async (req: AuthRequest, res: Response) => {
     }
 
     return res.status(200).json({
-      message: "Mesa eliminada correctamente",
+      message: "Mesa desactivada correctamente",
     });
   } catch (error) {
-    console.error("Error eliminando mesa:", error);
+    console.error("Error desactivando la mesa:", error);
 
     return res.status(500).json({
-      message: "No se pudo eliminar la mesa",
+      message: "No se pudo desactivar la mesa",
+    });
+  }
+};
+
+//Activar una mesa
+export const activateTable = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = tableParamsSchema.parse(req.params);
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
+
+    const [mesa] = await db
+      .update(tables)
+      .set({ active: true })
+      .where(
+        and(
+          eq(tables.id, id),
+          eq(tables.businessId, businessId),
+          eq(tables.active, false),
+        ),
+      )
+      .returning();
+
+    if (!mesa) {
+      return res.status(404).json({
+        message: "Mesa no encontrada o ya está activa",
+      });
+    }
+
+    return res.status(200).json({
+      message: "Mesa activada correctamente",
+    });
+  } catch (error) {
+    console.error("Error activando mesa:", error);
+
+    return res.status(500).json({
+      message: "No se pudo activar la mesa",
     });
   }
 };
