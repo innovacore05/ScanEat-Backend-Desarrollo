@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db } from "../db/connection";
 import { invoicingConfig, issuerSchema } from "../db/schemas/billingSchema";
 import { AuthRequest } from "../middleware/authenticate";
+import { fetchRegime } from "../services/factura.service";
 
 // obtener los datos del emisor del negocio
 export const getIssuer = async (req: AuthRequest, res: Response) => {
@@ -49,15 +50,59 @@ export const saveIssuer = async (req: AuthRequest, res: Response) => {
       neighborhood: parsed.data.neighborhood || null,
     };
 
+    const [current] = await db
+      .select({
+        environment: invoicingConfig.environment,
+        legalId: invoicingConfig.legalId,
+        legalIdType: invoicingConfig.legalIdType,
+      })
+      .from(invoicingConfig)
+      .where(eq(invoicingConfig.businessId, businessId))
+      .limit(1);
+
+    const identityChanged =
+      !!current &&
+      (current.legalId !== values.legalId ||
+        current.legalIdType !== values.legalIdType);
+
+    const certificateInvalidated =
+      !!current && (identityChanged || current.environment !== values.environment);
+
+    // el régimen lo decide el backend, nunca el cliente
+    let regime: Awaited<ReturnType<typeof fetchRegime>> = null;
+    try {
+      regime = await fetchRegime(values.legalId);
+    } catch (error) {
+      console.error("No se pudo verificar el régimen:", error);
+    }
+
+    const regimeFields = regime
+      ? {
+          regimeKey: regime.key,
+          chargesVat: regime.chargesVat,
+          regimeVerifiedAt: new Date(),
+        }
+      : identityChanged
+        ? { regimeKey: null, chargesVat: null, regimeVerifiedAt: null }
+        : {}; // misma cédula y falló la consulta: se conserva lo guardado
+
     await db
       .insert(invoicingConfig)
-      .values({ businessId, ...values })
+      .values({ businessId, ...values, ...regimeFields })
       .onConflictDoUpdate({
         target: invoicingConfig.businessId,
-        set: { ...values, updatedAt: new Date() },
+        set: {
+          ...values,
+          ...regimeFields,
+          ...(certificateInvalidated ? { certificateUploadedAt: null } : {}),
+          updatedAt: new Date(),
+        },
       });
-
-    res.json({ ok: true });
+    res.json({
+      ok: true,
+      regimeVerified: regime !== null,
+      certificateInvalidated,
+    });
   } catch (error) {
     console.error("Error guardando datos del emisor:", error);
     res
@@ -65,6 +110,8 @@ export const saveIssuer = async (req: AuthRequest, res: Response) => {
       .json({ message: "No se pudo guardar la información del emisor" });
   }
 };
+
+
 
 // reenvio de el .p12 y las credenciales a Factura en CR. No se guarda nada de esto
 export const uploadCertificate = async (req: AuthRequest, res: Response) => {

@@ -27,7 +27,7 @@ import {
   orderStatusSchema,
   type CreateOrderInput
 } from "../db/schemas/orderSchema";
-
+import { getChargesVat } from "../services/regime.service";
 
 
 const roundCurrency = (value: number) =>
@@ -56,17 +56,18 @@ type ProductPricingData = {
 const calculateOrderLines = (
   items: CreateOrderInput["items"],
   productData: Map<number, ProductPricingData>,
+  chargesVat: boolean | null,
 ) =>
   items.map((item) => {
     const product = productData.get(item.productId)!;
-    const ivaRate = product.ivaRate!;
+    const vat = chargesVat !== false;
+    const ivaRate = vat ? product.ivaRate! : 0;
+    const ivaRateCode = vat ? product.ivaRateCode : "01";
 
     const gross = roundCurrency(product.price * item.quantity);
-    const discountAmount = roundCurrency(
-      gross * (product.discount / 100),
-    );
+    const discountAmount = roundCurrency(gross * (product.discount / 100));
     const subtotal = roundCurrency(gross - discountAmount);
-    const taxAmount = roundCurrency(subtotal * (ivaRate / 100));
+    const taxAmount = vat ? roundCurrency(subtotal * (ivaRate / 100)) : 0;
 
     return {
       productId: item.productId,
@@ -77,11 +78,10 @@ const calculateOrderLines = (
       taxAmount,
       cabysCode: product.cabysCode,
       ivaRate: ivaRate.toFixed(2),
-      ivaRateCode: product.ivaRateCode,
+      ivaRateCode,
       selectedOptions: item.selectedOptions,
     };
   });
-
 
 const normalizeOrderState = (value?: string) => {
   if (!value) return undefined;
@@ -292,7 +292,7 @@ export const quoteOrder = async (req: Request, res: Response) => {
         !product.ivaRateCode ||
         ivaRate === null ||
         !Number.isFinite(ivaRate) ||
-        ivaRate <= 0 ||
+       ivaRate < 0 ||
         ivaRate > 100
       );
     });
@@ -334,8 +334,8 @@ export const quoteOrder = async (req: Request, res: Response) => {
       ]),
     );
 
-
-    const lines = calculateOrderLines(parsed.items, productData);
+const chargesVat = await getChargesVat(table.businessId);
+const lines = calculateOrderLines(parsed.items, productData, chargesVat);
 
     const subtotal = roundCurrency(
       lines.reduce((sum, line) => sum + line.subtotal, 0),
@@ -491,7 +491,7 @@ export const createOrder = async (req: Request, res: Response) => {
             !product.ivaRateCode ||
             ivaRate === null ||
             !Number.isFinite(ivaRate) ||
-            ivaRate <= 0 ||
+            ivaRate < 0 ||
             ivaRate > 100
           );
         });
@@ -517,11 +517,8 @@ export const createOrder = async (req: Request, res: Response) => {
         };
       }
 
-
-      //detalle cliente:
-      // CAMBIO: createOrder usa el mismo cálculo que quoteOrder.
-      const detailValues = calculateOrderLines(parsed.items, productData);
-
+const chargesVat = await getChargesVat(table.businessId, tx);
+const detailValues = calculateOrderLines(parsed.items, productData, chargesVat);
       //nuevo:la mesa tiene una orden activa?
 
       const [activeOrder] = await tx

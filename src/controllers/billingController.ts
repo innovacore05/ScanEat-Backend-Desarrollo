@@ -9,6 +9,8 @@ import { products } from "../db/schemas/adminMenuSchema";
 
 import  {invoicingConfig,payments, receiptDetails, receiptTaxes,receipts } from "../db/schemas/billingSchema";
 
+import { emitTiquete,refreshReceiptStatus } from "../services/factura.service";
+import { otherCharges } from "../db/schemas/billingSchema"; 
 
 
 const roundCurrency=(value:number)=>
@@ -32,28 +34,26 @@ type LineRow = {
   };
 };
 
-const findMissingFiscalLine = (rows: LineRow[]) =>
+const findMissingFiscalLine = (rows: LineRow[], chargesVat: boolean | null) =>
   rows.find(({ detail }) => {
-    const ivaRate =
-      detail.ivaRate === null ? null : Number(detail.ivaRate);
-    const taxAmount =
-      detail.taxAmount === null ? null : Number(detail.taxAmount);
+    if (!detail.cabysCode || !/^\d{13}$/.test(detail.cabysCode)) return true;
+    if (chargesVat === false) return false; // simplificado: no se exige IVA
+
+    const ivaRate = detail.ivaRate === null ? null : Number(detail.ivaRate);
+    const taxAmount = detail.taxAmount === null ? null : Number(detail.taxAmount);
 
     return (
-      !detail.cabysCode ||
-      !/^\d{13}$/.test(detail.cabysCode) ||
       !detail.ivaRateCode ||
       !/^\d{2}$/.test(detail.ivaRateCode) ||
       ivaRate === null ||
       !Number.isFinite(ivaRate) ||
-      ivaRate <= 0 ||
+      ivaRate < 0 ||
       ivaRate > 100 ||
       taxAmount === null ||
       !Number.isFinite(taxAmount) ||
       taxAmount < 0
     );
   });
-
 type IssuerRow=typeof invoicingConfig.$inferSelect;
 
 
@@ -83,27 +83,29 @@ const getIssuerProblem = (issuer: IssuerRow | undefined): string | null => {
     return `Faltan datos del emisor: ${missing.join(", ")}.`;
   }
 
- 
+   if (issuer.chargesVat === null || issuer.chargesVat === undefined) {
+    return "Falta verificar el régimen del emisor. Guardá los datos del emisor para consultarlo.";
+  }
+
   if (!issuer.certificateUploadedAt) {
-    return "El certificado del emisor no ha sido cargado en Factura en CR.";
+    return "No hay constancia de que el certificado del emisor se haya cargado.";
   }
 
   return null;
 };
 
 
-const buildLines = (rows: LineRow[]) =>
+const buildLines = (rows: LineRow[], chargesVat: boolean | null) =>
   rows.map((row) => {
+    const vat = chargesVat !== false;
     const unitPrice = Number(row.detail.unitPrice);
     const quantity = row.detail.quantity;
     const discount = Number(row.detail.discountAmount);
     const subtotal = Number(row.detail.subtotal);
-
-   const tax = Number(row.detail.taxAmount);
+    const tax = vat ? Number(row.detail.taxAmount) : 0;
     const gross = roundCurrency(unitPrice * quantity);
     const total = roundCurrency(subtotal + tax);
 
-    
     return {
       detailId: row.detail.detailId,
       detail: row.product.productName,
@@ -113,34 +115,34 @@ const buildLines = (rows: LineRow[]) =>
       discount: discount.toFixed(2),
       subtotal: row.detail.subtotal,
       tax: tax.toFixed(2),
-      //cabys
-        cabysCode: row.detail.cabysCode!,
-      ivaRate: row.detail.ivaRate!,
-      ivaRateCode: row.detail.ivaRateCode!,
-
+      cabysCode: row.detail.cabysCode!,
+      ivaRate: vat ? row.detail.ivaRate! : "0.00",
+      ivaRateCode: vat ? row.detail.ivaRateCode! : "01",
       total: total.toFixed(2),
     };
   });
-
 type BuiltLine = ReturnType<typeof buildLines>[number];
 
 
 const toCents = (value: string | number) => Math.round(Number(value) * 100);
 
-// totales calculados con las mismas lineas, en centavos enteros
-const buildTotals = (lines: BuiltLine[]) => {
-  const totalNetSale = lines.reduce((sum, line) => sum + toCents(line.subtotal), 0);
-  const totalTax = lines.reduce((sum, line) => sum + toCents(line.tax), 0);
-  const totalDiscount = lines.reduce((sum, line) => sum + toCents(line.discount), 0);
+
+const SERVICE_RATE = 0.1;
+
+const buildTotals = (lines: BuiltLine[], includeService: boolean) => {
+  const totalNetSale = lines.reduce((s, l) => s + toCents(l.subtotal), 0);
+  const totalTax = lines.reduce((s, l) => s + toCents(l.tax), 0);
+  const totalDiscount = lines.reduce((s, l) => s + toCents(l.discount), 0);
+  const service = includeService ? Math.round(totalNetSale * SERVICE_RATE) : 0;
 
   return {
     totalSale: ((totalNetSale + totalTax) / 100).toFixed(2),
     totalDiscount: (totalDiscount / 100).toFixed(2),
     totalNetSale: (totalNetSale / 100).toFixed(2),
     totalTax: (totalTax / 100).toFixed(2),
-    serviceCharge: "0.00",
-    totalOtherCharges: "0.00",
-    totalVoucher: "0.00",
+    serviceCharge: (service / 100).toFixed(2),
+    totalOtherCharges: (service / 100).toFixed(2),
+    totalVoucher: ((totalNetSale + totalTax + service) / 100).toFixed(2),
   };
 };
 
@@ -163,9 +165,7 @@ const buildTaxSummary = (lines: BuiltLine[]) => {
 };
 
 
-export const getPaymentPreview = async (
-  req: AuthRequest, 
-  res: Response,) => {
+export const getPaymentPreview = async (req: AuthRequest, res: Response) => {
   try {
     const orderId = Number(req.params.orderId);
     const businessId = req.user?.business_id;
@@ -182,26 +182,21 @@ export const getPaymentPreview = async (
       });
     }
 
-  const rows = await db
-  .select({
-    order: orders,
-    table: tables,
-    detail: orderDetails,
-    product: {
-      productName: products.productName,
-    },
-  })
-  .from(orders)
-  .innerJoin(tables, eq(orders.tableId, tables.id))
-  .innerJoin(orderDetails, eq(orders.orderId, orderDetails.orderId))
-  // cambys: relaciona cada detalle con su producto para obtener el nombre
-  .innerJoin(products, eq(orderDetails.productId, products.productId))
-  .where(
-    and(
-      eq(orders.orderId, orderId),
-      eq(tables.businessId, businessId),
-    ),
-  );
+    const rows = await db
+      .select({
+        order: orders,
+        table: tables,
+        detail: orderDetails,
+        product: { productName: products.productName },
+      })
+      .from(orders)
+      .innerJoin(tables, eq(orders.tableId, tables.id))
+      .innerJoin(orderDetails, eq(orders.orderId, orderDetails.orderId))
+      .innerJoin(products, eq(orderDetails.productId, products.productId))
+      .where(
+        and(eq(orders.orderId, orderId), eq(tables.businessId, businessId)),
+      );
+
     if (rows.length === 0) {
       return res.status(404).json({ message: "Orden no encontrada" });
     }
@@ -217,11 +212,18 @@ export const getPaymentPreview = async (
         .json({ message: "La orden no está pendiente de cobro" });
     }
 
+    const [issuer] = await db
+      .select()
+      .from(invoicingConfig)
+      .where(eq(invoicingConfig.businessId, businessId))
+      .limit(1);
 
+    const issuerProblem = getIssuerProblem(issuer);
+    if (issuerProblem) {
+      return res.status(409).json({ message: issuerProblem });
+    }
 
-    // cabys:no mostrar un cobro si faltan datos fiscales
-    const missingFiscalLine = findMissingFiscalLine(rows);
-
+    const missingFiscalLine = findMissingFiscalLine(rows, issuer.chargesVat);
     if (missingFiscalLine) {
       return res.status(409).json({
         message:
@@ -230,35 +232,20 @@ export const getPaymentPreview = async (
       });
     }
 
+    const includeService = req.query.service !== "false";
+    const lines = buildLines(rows, issuer.chargesVat);
 
-    const [issuer] = await db
-      .select()
-      .from(invoicingConfig)
-      .where(eq(invoicingConfig.businessId, businessId))
-      .limit(1);
-
-    const issuerProblem = getIssuerProblem(issuer);
-
-    if (issuerProblem) {
-      return res.status(409).json({ message: issuerProblem });
-    }
-
-
-    const lines = buildLines(rows);
-
-     return res.status(200).json({
+    return res.status(200).json({
       orderId: firstRow.order.orderId,
       tableNumber: firstRow.table.tableNumber,
       lines,
-      totals: buildTotals(lines),
+      totals: buildTotals(lines, includeService),
       taxSummary: buildTaxSummary(lines),
+      chargesVat: issuer.chargesVat,
       missingCabys: [],
     });
-
-
   } catch (error) {
     console.error("Error obteniendo preview de pago:", error);
-
     return res.status(500).json({
       message: "No se pudo cargar la información de pago",
     });
@@ -269,10 +256,12 @@ const payOrderSchema = z.union([
   z.object({
     method: z.literal("cash"),
     amountTendered: z.coerce.number().positive(),
+    includeServiceCharge: z.boolean().default(true),
   }),
   z.object({
     method: z.enum(["card", "sinpe"]),
     reference: z.string().trim().min(1).max(50),
+    includeServiceCharge: z.boolean().default(true),
   }),
 ]);
 
@@ -326,36 +315,15 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         return { type: "not-found" as const };
       }
 
-      const { order, table } = rows[0];
-     
+         const { order, table } = rows[0];
 
-//cabys:valida los datos fiscales antes de marar pagado
-  const missingFiscalLine = findMissingFiscalLine(rows);
- 
-
-      if (missingFiscalLine) {
-        return {
-          type: "missing-fiscal" as const,
-          productId: missingFiscalLine.detail.productId,
-        };
-      }
-
-      if (
-        order.state !== orderStatuses.delivered ||
-        order.paidAt
-      ) {
-        return { type: "not-payable" as const };
-      }
-
-
-            const [issuer] = await tx
+      const [issuer] = await tx
         .select()
         .from(invoicingConfig)
         .where(eq(invoicingConfig.businessId, businessId))
         .limit(1);
 
       const issuerProblem = getIssuerProblem(issuer);
-
       if (!issuer || issuerProblem) {
         return {
           type: "issuer-incomplete" as const,
@@ -363,25 +331,38 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         };
       }
 
+      const missingFiscalLine = findMissingFiscalLine(rows, issuer.chargesVat);
+      if (missingFiscalLine) {
+        return {
+          type: "missing-fiscal" as const,
+          productId: missingFiscalLine.detail.productId,
+        };
+      }
 
- // lineas y totales salen de la misma fuente, y de aqui sale TODO
-      const lines = buildLines(rows);
-      const totals = buildTotals(lines);
+      if (order.state !== orderStatuses.delivered || order.paidAt) {
+        return { type: "not-payable" as const };
+      }
+
+      const lines = buildLines(rows, issuer.chargesVat);
+      const totals = buildTotals(lines, payload.includeServiceCharge);
       const taxSummary = buildTaxSummary(lines);
-      const total = Number(totals.totalSale);
+      const total = Number(totals.totalVoucher); // lo que realmente se cobra
 
-      // se valida ANTES de marcar la orden como pagada
       if (payload.method === "cash" && payload.amountTendered < total) {
         return { type: "insufficient" as const };
       }
 
-      // "reclama" la orden: si otro cobro ya la tomó, no devuelve filas
+      // orders.* queda con venta + IVA (sin servicio) para que la analítica coincida
       const [claimed] = await tx
         .update(orders)
         .set({
           state: orderStatuses.paid,
           paidAt: new Date(),
-        }) .where(
+          subtotal: totals.totalNetSale,
+          tax: totals.totalTax,
+          total: totals.totalVoucher,
+        })
+        .where(
           and(
             eq(orders.orderId, orderId),
             eq(orders.state, orderStatuses.delivered),
@@ -406,6 +387,8 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
           totalNetSale: totals.totalNetSale,
           totalTax: totals.totalTax,
           cashierId,
+            totalOtherCharges: totals.totalOtherCharges,
+          totalVoucher: totals.totalVoucher,
         })
         .returning();
 
@@ -433,19 +416,30 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         });
 
      // cabys: guardar tarifa y monto de IVA 
-      await tx.insert(receiptTaxes).values(
-        savedReceiptLines.map((savedLine) => {
-          const line = lines[savedLine.lineNumber - 1];
+          if (issuer.chargesVat !== false) {
+        await tx.insert(receiptTaxes).values(
+          savedReceiptLines.map((savedLine) => {
+            const line = lines[savedLine.lineNumber - 1];
+            return {
+              detailId: savedLine.detailId,
+              taxCode: "01",
+              taxRateCode: line.ivaRateCode,
+              taxRate: line.ivaRate,
+              amount: line.tax,
+            };
+          }),
+        );
+      }
 
-          return {
-            detailId: savedLine.detailId,
-            taxCode: "01",
-            taxRateCode: line.ivaRateCode,
-            taxRate: line.ivaRate,
-            amount: line.tax,
-          };
-        }),
-      );
+      if (Number(totals.serviceCharge) > 0) {
+        await tx.insert(otherCharges).values({
+          receiptId: receipt.receiptId,
+          chargeType: "06",
+          detail: "Impuesto de servicio",
+          percentage: "10.00",
+          amount: totals.serviceCharge,
+        });
+      }
 
       const change =
         payload.method === "cash"
@@ -456,7 +450,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
         receiptId: receipt.receiptId,
         method: METHOD_CODES[payload.method],
         reference: payload.method === "cash" ? null : payload.reference,
-               amount: totals.totalSale,
+         amount: totals.totalVoucher,
         amountTendered:
           payload.method === "cash" ? payload.amountTendered.toFixed(2) : null,
         changeGiven: change === null ? null : change.toFixed(2),
@@ -505,7 +499,28 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
       return res.status(409).json({ message: result.message });
     }
 
-   const { receipt, table, issuer, lines, totals, taxSummary, change } = result;
+          const {
+      receipt: createdReceipt,
+      table,
+      issuer,
+      lines,
+      totals,
+      taxSummary,
+      change,
+    } = result;
+
+    const emitted = await emitTiquete({
+      receiptId: createdReceipt.receiptId,
+      orderId,
+      issuer,
+      lines,
+      total: totals.totalVoucher,
+      serviceCharge: totals.serviceCharge,
+      chargesVat: issuer.chargesVat !== false,
+      paymentMethod: payload.method,
+    });
+
+    const receipt = emitted ?? createdReceipt;
 
     return res.status(201).json({
       receiptId: receipt.receiptId,
@@ -514,6 +529,7 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
       documentType: receipt.documentType,
       issueDate: receipt.issueDate,
       haciendaStatus: receipt.haciendaStatus,
+      haciendaMessage: receipt.haciendaMessage,
       clave: receipt.clave,
       consecutiveNumber: receipt.consecutiveNumber,
       environment: receipt.environment,
@@ -541,5 +557,33 @@ export const payOrder = async (req: AuthRequest, res: Response) => {
     console.error("Error registrando el cobro:", error);
 
     return res.status(500).json({ message: "No se pudo registrar el cobro" });
+  }
+};
+
+export const getReceiptStatus = async (req: AuthRequest, res: Response) => {
+  try {
+    const receiptId = Number(req.params.receiptId);
+    const businessId = req.user?.business_id;
+
+    if (!Number.isInteger(receiptId) || receiptId <= 0 || !businessId) {
+      return res.status(400).json({ message: "Solicitud no válida" });
+    }
+
+    const receipt = await refreshReceiptStatus(receiptId, businessId);
+
+    if (!receipt) {
+      return res.status(404).json({ message: "Recibo no encontrado" });
+    }
+
+    return res.json({
+      receiptId: receipt.receiptId,
+      haciendaStatus: receipt.haciendaStatus,
+      haciendaMessage: receipt.haciendaMessage,
+      clave: receipt.clave,
+      consecutiveNumber: receipt.consecutiveNumber,
+    });
+  } catch (error) {
+    console.error("Error consultando el estado del tiquete:", error);
+    return res.status(502).json({ message: "No se pudo consultar el estado" });
   }
 };

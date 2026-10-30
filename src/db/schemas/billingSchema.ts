@@ -7,6 +7,7 @@ import{
      text,
      timestamp,
      varchar,
+     boolean,
 type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
@@ -47,7 +48,11 @@ export const invoicingConfig = pgTable("invoicing_config", {
     .notNull()
     .default("sandbox"),
 
-    
+    //regimen
+      regimeKey: varchar("regime_key", { length: 30 }),
+  chargesVat: boolean("charges_vat"),
+  regimeVerifiedAt: timestamptz("regime_verified_at"),
+
   // fecha en que se subio el certificado a Factura en CR
   certificateUploadedAt: timestamptz("certificate_uploaded_at"),
 
