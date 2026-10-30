@@ -14,6 +14,44 @@ import {
 import { deleteImageFromStorage, uploadImageToStorage } from "../services/storage.service";
 import { validateImage } from "../utils/validateImage";
 import { isFiscalType,resolveFiscalOption } from "../services/cabys.service";
+import { getChargesVat } from "../services/regime.service";
+
+//esto de acae s para que en el  menu se sume al precio el total con iva si acplica
+const roundMenuPrice = (value: number): number =>
+  Math.round((value + Number.EPSILON) * 100) / 100;
+
+const getMenuDisplayPrices = (
+  price: number,
+  discount: number,
+  ivaRate: number,
+  chargesVat: boolean | null,
+) => {
+  // Igual que el cálculo del pedido: solo excluimos el IVA
+  // cuando el régimen está confirmado como uno que no lo traslada.
+  const effectiveRate = chargesVat === false ? 0 : ivaRate;
+
+  const originalTax = roundMenuPrice(price * (effectiveRate / 100));
+  const discountedBase = roundMenuPrice(
+    price - roundMenuPrice(price * (discount / 100)),
+  );
+  const discountedTax = roundMenuPrice(
+    discountedBase * (effectiveRate / 100),
+  );
+
+  return {
+    priceWithTax: roundMenuPrice(price + originalTax),
+    discountedPriceWithTax: roundMenuPrice(
+      discountedBase + discountedTax,
+    ),
+    displayIvaRate: effectiveRate,
+  };
+};
+
+
+
+
+
+
 
 
 export const getProducts = async (
@@ -58,16 +96,18 @@ export const getProducts = async (
     const offsetNum = offset ? Number(offset) : 0;
 
     const result = await db
-      .select({
-        productId: products.productId,
-        productName: products.productName,
-        description: products.description,
-        price: products.price,
-        image: products.image,
-        rating: products.rating,
-        categoryId: products.categoryId,
-        discount: products.discount,
-      })
+  .select({
+    productId: products.productId,
+    productName: products.productName,
+    description: products.description,
+    price: products.price,
+    image: products.image,
+    rating: products.rating,
+    categoryId: products.categoryId,
+    discount: products.discount,
+    ivaRate: products.ivaRate,
+    ivaRateCode: products.ivaRateCode,
+  })
       .from(products)
       .leftJoin(
         categories,
@@ -93,12 +133,29 @@ export const getProducts = async (
       .limit(limitNum)
       .offset(offsetNum);
 
-    const formatted = result.map((p) => ({
-      ...p,
-      price: Number(p.price),
-      rating: Number(p.rating),
-    }));
 
+const chargesVat = await getChargesVat(businessId);
+
+const formatted = result.map((product) => {
+  const price = Number(product.price);
+  const discount = Number(product.discount ?? 0);
+  const ivaRate = Number(product.ivaRate ?? 0);
+
+  const displayPrices = getMenuDisplayPrices(
+    price,
+    discount,
+    ivaRate,
+    chargesVat,
+  );
+
+  return {
+    ...product,
+    // Se conserva como precio base para el pedido
+    price, 
+    ...displayPrices,
+    rating: Number(product.rating),
+  };
+});
     res.status(200).json({
       products: formatted,
       hasMore: formatted.length === limitNum,
@@ -129,11 +186,20 @@ export const getProductsById = async (req: AuthRequest, res: Response) => {
     }
 
 
-    const product = {
-      ...result[0],
-      price: Number(result[0].price),
-      rating: Number(result[0].rating),
-    };
+  const row = result[0];
+const chargesVat = await getChargesVat(row.businessId);
+
+const price = Number(row.price);
+const discount = Number(row.discount ?? 0);
+const ivaRate = Number(row.ivaRate ?? 0);
+
+const product = {
+  ...row,
+  price,
+  discount,
+  rating: Number(row.rating),
+  ...getMenuDisplayPrices(price, discount, ivaRate, chargesVat),
+};
 
     let optionGroups: Array<{
       id: number;

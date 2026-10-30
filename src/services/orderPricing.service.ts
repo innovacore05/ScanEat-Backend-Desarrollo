@@ -19,15 +19,20 @@ export type OrderLineInput = {
 export const calculateOrderLines = (
   items: OrderLineInput[],
   productData: Map<number, ProductPricingData>,
+  chargesVat: boolean | null,   
 ) =>
-  items.map((item) => {
+ items.map((item) => {
     const product = productData.get(item.productId)!;
-    const ivaRate = product.ivaRate!;
+
+    // false = simplificado: no traslada IVA
+    const vat = chargesVat !== false;
+    const ivaRate = vat ? product.ivaRate! : 0;
+    const ivaRateCode = vat ? product.ivaRateCode : "10";
 
     const gross = roundCurrency(product.price * item.quantity);
     const discountAmount = roundCurrency(gross * (product.discount / 100));
     const subtotal = roundCurrency(gross - discountAmount);
-    const taxAmount = roundCurrency(subtotal * (ivaRate / 100));
+    const taxAmount = vat ? roundCurrency(subtotal * (ivaRate / 100)) : 0;
 
     return {
       productId: item.productId,
@@ -38,7 +43,7 @@ export const calculateOrderLines = (
       taxAmount,
       cabysCode: product.cabysCode,
       ivaRate: ivaRate.toFixed(2),
-      ivaRateCode: product.ivaRateCode,
+      ivaRateCode,
       selectedOptions: item.selectedOptions,
       clientId: item.clientId ?? null,
     };

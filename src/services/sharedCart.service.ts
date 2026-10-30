@@ -17,6 +17,7 @@ import {
   getTableReadyClientIds,
 } from "../socket";
 import { createOrderFromCart } from "./orderCreation.service";
+import { getChargesVat } from "./regime.service";
 
 //limites del carrito, tiempo e 60 m y max de productos 
 const CART_TTL_MS = 60 * 60 * 1000; 
@@ -120,6 +121,17 @@ export const loadCartLines = async (executor: typeof db | Tx, cartId: string) =>
     ]),
   );
 
+  const [owner] = await executor
+    .select({ businessId: tables.businessId })
+    .from(sharedCarts)
+    .innerJoin(tables, eq(tables.id, sharedCarts.tableId))
+    .where(eq(sharedCarts.id, cartId))
+    .limit(1);
+
+  const chargesVat = owner
+    ? await getChargesVat(owner.businessId, executor)
+    : null;
+
   const lines = calculateOrderLines(
     rows.map((r) => ({
       productId: r.item.productId,
@@ -128,10 +140,12 @@ export const loadCartLines = async (executor: typeof db | Tx, cartId: string) =>
       clientId: r.item.clientId,
     })),
     productData,
+    chargesVat,
   );
 
-  return { rows, lines };
+  return { rows, lines, chargesVat };
 };
+
 
 export const buildCartState = async (cart: Cart) => {
   const { rows, lines } = await loadCartLines(db, cart.id);
@@ -198,7 +212,7 @@ export const submitCart = async (tableId: string, observation?: string | null) =
     if (!cart) throw new CartError(409, "El carrito ya fue enviado o no existe");
     if (cart.expiresAt <= new Date()) throw new CartError(410, "El carrito expiró");
 
-    const { rows, lines } = await loadCartLines(tx, cart.id);
+    const { rows, lines, chargesVat } = await loadCartLines(tx, cart.id);
     if (rows.length === 0) throw new CartError(400, "El carrito está vacío");
 
     const [table] = await tx
@@ -212,6 +226,7 @@ export const submitCart = async (tableId: string, observation?: string | null) =
       tx,
       tableId,
       lines,
+      chargesVat,
       observation ?? cart.observation,
     );
 

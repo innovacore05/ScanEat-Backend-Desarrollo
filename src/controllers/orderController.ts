@@ -29,7 +29,7 @@ import {
   type CreateOrderInput
 } from "../db/schemas/orderSchema";
 import {emitToTable, emitOrderChanged } from "../socket";
-
+import { getChargesVat } from "../services/regime.service";
 
 const roundCurrency = (value: number) =>
   Math.round((value + Number.EPSILON) * 100) / 100;
@@ -67,17 +67,18 @@ type ProductPricingData = {
 const calculateOrderLines = (
   items: CreateOrderInput["items"],
   productData: Map<number, ProductPricingData>,
+  chargesVat: boolean | null,
 ) =>
   items.map((item) => {
     const product = productData.get(item.productId)!;
-    const ivaRate = product.ivaRate!;
+    const vat = chargesVat !== false;
+    const ivaRate = vat ? product.ivaRate! : 0;
+    const ivaRateCode = vat ? product.ivaRateCode : "10";
 
     const gross = roundCurrency(product.price * item.quantity);
-    const discountAmount = roundCurrency(
-      gross * (product.discount / 100),
-    );
+    const discountAmount = roundCurrency(gross * (product.discount / 100));
     const subtotal = roundCurrency(gross - discountAmount);
-    const taxAmount = roundCurrency(subtotal * (ivaRate / 100));
+    const taxAmount = vat ? roundCurrency(subtotal * (ivaRate / 100)) : 0;
 
     return {
       productId: item.productId,
@@ -88,7 +89,7 @@ const calculateOrderLines = (
       taxAmount,
       cabysCode: product.cabysCode,
       ivaRate: ivaRate.toFixed(2),
-      ivaRateCode: product.ivaRateCode,
+      ivaRateCode,
       selectedOptions: item.selectedOptions,
     };
   });
@@ -310,7 +311,7 @@ export const quoteOrder = async (req: Request, res: Response) => {
         !product.ivaRateCode ||
         ivaRate === null ||
         !Number.isFinite(ivaRate) ||
-        ivaRate <= 0 ||
+       ivaRate < 0 ||
         ivaRate > 100
       );
     });
@@ -353,8 +354,8 @@ export const quoteOrder = async (req: Request, res: Response) => {
     );
 
 
-    const lines = calculateOrderLines(parsed.items, productData);
-
+     const chargesVat = await getChargesVat(table.businessId);
+    const lines = calculateOrderLines(parsed.items, productData, chargesVat);
     const subtotal = roundCurrency(
       lines.reduce((sum, line) => sum + line.subtotal, 0),
     );
@@ -384,6 +385,7 @@ export const quoteOrder = async (req: Request, res: Response) => {
         discountAmount: Number(line.discountAmount),
         subtotal: line.subtotal,
         ivaRate: Number(line.ivaRate),
+        
         taxAmount: line.taxAmount,
         total: roundCurrency(line.subtotal + line.taxAmount),
       })),
@@ -509,7 +511,7 @@ export const createOrder = async (req: Request, res: Response) => {
             !product.ivaRateCode ||
             ivaRate === null ||
             !Number.isFinite(ivaRate) ||
-            ivaRate <= 0 ||
+           ivaRate < 0 ||
             ivaRate > 100
           );
         });
@@ -538,8 +540,8 @@ export const createOrder = async (req: Request, res: Response) => {
 
       //detalle cliente:
       // CAMBIO: createOrder usa el mismo cálculo que quoteOrder.
-      const detailValues = calculateOrderLines(parsed.items, productData);
-
+            const chargesVat = await getChargesVat(table.businessId, tx);
+      const detailValues = calculateOrderLines(parsed.items, productData, chargesVat);
       //nuevo:la mesa tiene una orden activa?
 
       const [activeOrder] = await tx
@@ -1510,7 +1512,7 @@ export const addItemsToOrder = async (
         const iva = p.ivaRate === null ? null : Number(p.ivaRate);
         return (
           !p.cabysCode || !/^\d{13}$/.test(p.cabysCode) || !p.ivaRateCode ||
-          iva === null || !Number.isFinite(iva) || iva <= 0 || iva > 100
+          iva === null || !Number.isFinite(iva) || iva < 0 || iva > 100
         );
       });
       if (missingFiscal) {
@@ -1535,9 +1537,12 @@ export const addItemsToOrder = async (
         ]),
       );
 
+     const chargesVat = await getChargesVat(businessId, tx);
+
       const newLines = calculateOrderLines(
         parsed.data.items,
         productData,
+        chargesVat,
       );
 
       await tx.insert(orderDetails).values(

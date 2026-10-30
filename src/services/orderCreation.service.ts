@@ -10,6 +10,7 @@ export const createOrderFromCart = async (
   tx: Tx,
   tableId: string,
   lines: Lines,
+   chargesVat: boolean | null,  
   observation?: string | null,
 ) => {
   const [table] = await tx
@@ -20,14 +21,15 @@ export const createOrderFromCart = async (
   if (!table) throw new CartError(404, "Mesa no encontrada o inactiva");
 
   // Mismos datos fiscales que exige payOrder: falla al enviar, no al cobrar
-  const bad = lines.find((l) => {
+    const bad = lines.find((l) => {
+    if (!l.cabysCode || !/^\d{13}$/.test(l.cabysCode)) return true;
+    if (chargesVat === false) return false; // simplificado: no se exige IVA
     const iva = Number(l.ivaRate);
     return (
-      !l.cabysCode ||
-      !/^\d{13}$/.test(l.cabysCode) ||
       !l.ivaRateCode ||
+      !/^\d{2}$/.test(l.ivaRateCode) ||
       !Number.isFinite(iva) ||
-      iva <= 0 ||
+      iva < 0 ||
       iva > 100
     );
   });
