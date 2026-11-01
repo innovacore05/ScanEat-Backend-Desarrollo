@@ -40,6 +40,12 @@ const addItemsSchema = z.object({
       productId: z.coerce.number().int().positive(),
       quantity: z.coerce.number().int().positive(),
       selectedOptions: z.record(z.string(), z.string()).optional().default({}),
+      specialInstructions: z.array(
+      z.object({
+        unit: z.number().int().positive(),
+        instruction: z.string().trim().min(1).max(500),
+      }),
+    ).optional().default([]),
     }),
   ).min(1),
 });
@@ -91,6 +97,7 @@ const calculateOrderLines = (
       ivaRate: ivaRate.toFixed(2),
       ivaRateCode,
       selectedOptions: item.selectedOptions,
+      specialInstructions: item.specialInstructions ?? [],
     };
   });
 
@@ -862,6 +869,10 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
         subtotal: string;
         isCustom: number | null;
         selectedOptions: Record<string, string>;
+        specialInstructions: {
+          unit: number;
+          instruction: string;
+        }[];
         optionGroups: Array<{
           id: number;
           name: string;
@@ -896,6 +907,7 @@ export const getOrders = async (req: AuthRequest, res: Response) => {
             subtotal: row.detail.subtotal,
             isCustom: row.product.isCustom,
             selectedOptions: row.detail.selectedOptions,
+            specialInstructions: row.detail.specialInstructions ?? [],
             optionGroups: [],
           };
           current.details.push(detail);
@@ -1545,6 +1557,19 @@ export const addItemsToOrder = async (
         chargesVat,
       );
 
+      const invalidInstructions = parsed.data.items.some((item) =>
+  item.specialInstructions.some(
+    (instruction) => instruction.unit > item.quantity,
+  ),
+);
+
+if (invalidInstructions) {
+  return {
+    type: "invalid-instructions" as const,
+  };
+}
+      
+
       await tx.insert(orderDetails).values(
         newLines.map((line) => ({
           orderId,
@@ -1559,6 +1584,7 @@ export const addItemsToOrder = async (
           ivaRate: line.ivaRate,
           ivaRateCode: line.ivaRateCode,
           selectedOptions: line.selectedOptions,
+          specialInstructions: line.specialInstructions ?? [],
         })),
       );
 
@@ -1614,6 +1640,12 @@ export const addItemsToOrder = async (
         },
       };
     });
+
+    if (result.type === "invalid-instructions") {
+      return res.status(400).json({
+        message: "La unidad indicada supera la cantidad del producto",
+      });
+    }
 
     if (result.type === "not-found") {
       return res.status(404).json({
@@ -1754,6 +1786,7 @@ export const getKitchenOrders = async (
           subtotal: row.detail.subtotal,
           isCustom: row.product.isCustom,
           selectedOptions: row.detail.selectedOptions,
+          specialInstructions: row.detail.specialInstructions ?? [],
           optionGroups: [],
         };
         current.details.push(detail);

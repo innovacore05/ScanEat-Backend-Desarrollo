@@ -134,6 +134,7 @@ export const loadCartLines = async (executor: typeof db | Tx, cartId: string) =>
 
   const lines = calculateOrderLines(
     rows.map((r) => ({
+      cartItemId: r.item.id,
       productId: r.item.productId,
       quantity: r.item.quantity,
       selectedOptions: r.item.selectedOptions ?? {},
@@ -167,6 +168,7 @@ export const buildCartState = async (cart: Cart) => {
       productName: r.name,
       quantity: r.item.quantity,
       selectedOptions: r.item.selectedOptions ?? {},
+      specialInstructions: r.item.specialInstructions ?? [],
       unitPrice: Number(lines[i].unitPrice),
       lineTotal: roundCurrency(lines[i].subtotal + lines[i].taxAmount),
     })),
@@ -185,8 +187,14 @@ const broadcast = async (cart: Cart) => {
   return state;
 };
 
+type SpecialInstructionInput = {
+  cartItemId: number;
+  clientId: string;
+  unit: number;
+  instruction: string;
+};
 
-export const submitCart = async (tableId: string, observation?: string | null) => {
+export const submitCart = async (tableId: string, observation?: string | null, specialInstructions: SpecialInstructionInput[] = [],) => {
   const connectedClients = await getConnectedClientIds(tableId);
   if (connectedClients.length > 0) {
     const readyClients = new Set(getTableReadyClientIds(tableId));
@@ -215,6 +223,42 @@ export const submitCart = async (tableId: string, observation?: string | null) =
     const { rows, lines, chargesVat } = await loadCartLines(tx, cart.id);
     if (rows.length === 0) throw new CartError(400, "El carrito está vacío");
 
+  // Obtener las instrucciones guardadas de todos los clientes.
+const allSpecialInstructions: SpecialInstructionInput[] =
+  rows.flatMap(({ item }) =>
+    (item.specialInstructions ?? []).map(({ unit, instruction }) => ({
+      cartItemId: item.id,
+      clientId: item.clientId,
+      unit,
+      instruction: instruction.trim(),
+    })),
+  );
+
+// Validar instrucciones especiales.
+for (const instruction of allSpecialInstructions) {
+  const cartItem = rows.find(
+    (row) => row.item.id === instruction.cartItemId,
+  );
+
+  if (!cartItem) {
+    throw new CartError(400, "Producto del carrito no encontrado");
+  }
+
+  if (instruction.unit > cartItem.item.quantity) {
+    throw new CartError(
+      400,
+      "La unidad indicada supera la cantidad del producto",
+    );
+  }
+
+  if (!instruction.instruction) {
+    throw new CartError(
+      400,
+      "Completa o elimina las instrucciones de preparación vacías",
+    );
+  }
+}
+
     const [table] = await tx
       .select({ businessId: tables.businessId })
       .from(tables)
@@ -228,6 +272,7 @@ export const submitCart = async (tableId: string, observation?: string | null) =
       lines,
       chargesVat,
       observation ?? cart.observation,
+      allSpecialInstructions,
     );
 
     await tx
@@ -402,16 +447,64 @@ export const updateItemQuantity = async (
   itemId: number,
   clientId: string,
   quantity: number,
+  specialInstructions?: { unit: number; instruction: string }[],
 ) => {
   const { cart, item } = await loadItemForChange(tableId, itemId, clientId);
   const touched = await db.transaction(async (tx) => {
     const t = await touchCart(tx, cart.id);
     await tx
       .update(sharedCartItems)
-      .set({ quantity, updatedAt: new Date() })
+      .set({
+  quantity,
+  specialInstructions: (specialInstructions ?? item.specialInstructions ?? []).filter(
+    (instruction) => instruction.unit <= quantity),
+  updatedAt: new Date(),
+})
       .where(eq(sharedCartItems.id, item.id));
     return t;
   });
+  return broadcast(touched);
+};
+
+// Actualiza las instrucciones especiales de un producto del carrito
+export const updateItemSpecialInstructions = async (
+  tableId: string,
+  itemId: number,
+  clientId: string,
+  specialInstructions: { unit: number; instruction: string }[],
+) => {
+  // Busca el carrito y el producto que se desea modificar
+  const { cart, item } = await loadItemForChange(tableId, itemId, clientId);
+
+  // Valida que las instrucciones correspondan a unidades existentes
+  for (const instruction of specialInstructions) {
+    if (
+      !Number.isInteger(instruction.unit) ||
+      instruction.unit < 1 ||
+      instruction.unit > item.quantity ||
+      !instruction.instruction.trim() ||
+      instruction.instruction.length > 500
+    ) {
+      throw new CartError(400, "Las instrucciones de preparación no son válidas");
+    }
+  }
+
+   // Guarda las instrucciones y actualiza la fecha de modificación del carrito
+  const touched = await db.transaction(async (tx) => {
+    const t = await touchCart(tx, cart.id);
+
+    await tx
+      .update(sharedCartItems)
+      .set({
+        specialInstructions,
+        updatedAt: new Date(),
+      })
+      .where(eq(sharedCartItems.id, item.id));
+
+    return t;
+  });
+
+  // Notifica los cambios del carrito a los demás usuarios
   return broadcast(touched);
 };
 

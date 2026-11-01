@@ -64,6 +64,10 @@ export const orderDetails = pgTable("order_details", {
     .$type<Record<string, string>>()
     .notNull()
     .default({}),
+  specialInstructions: json("special_instructions")
+    .$type<{ unit: number; instruction: string }[]>()
+    .notNull()
+    .default([]),
   orderId: integer("order_id")
     .notNull()
     .references(() => orders.orderId, { onDelete: "cascade" }),
@@ -95,6 +99,12 @@ const orderItemSchema = z.object({
   productId: z.coerce.number().int().positive("El producto no es válido"),
   quantity: z.coerce.number().int().positive("La cantidad debe ser mayor que cero"),
   selectedOptions: z.record(z.string(), z.string()).optional().default({}),
+  specialInstructions: z.array(
+    z.object({
+      unit: z.number().int().positive(),
+      instruction: z.string().trim().min(1).max(500),
+    }),
+  ).optional().default([]),
 });
 
 export const orderStatuses = {

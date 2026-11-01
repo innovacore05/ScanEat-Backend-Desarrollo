@@ -31,6 +31,10 @@ type LineRow = {
     ivaRate: string | null;
     ivaRateCode: string | null;
     taxAmount: string | null;
+    specialInstructions: {
+      unit: number;
+      instruction: string;
+    }[];
   };
   product: {
     productName: string;
@@ -126,6 +130,7 @@ const buildLines = (rows: LineRow[], chargesVat: boolean | null) =>
     return {
       detailId: row.detail.detailId,
       detail: row.product.productName,
+      specialInstructions: row.detail.specialInstructions ?? [],
       quantity,
       unitPrice: row.detail.unitPrice,
       gross: gross.toFixed(2),

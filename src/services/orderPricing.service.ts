@@ -10,10 +10,15 @@ export type ProductPricingData = {
 };
 
 export type OrderLineInput = {
+  cartItemId?: number;
   productId: number;
   quantity: number;
   selectedOptions: Record<string, string>;
   clientId?: string | null;
+  specialInstructions?: {
+    unit: number;
+    instruction: string;
+  }[];
 };
 
 export const calculateOrderLines = (
@@ -34,7 +39,8 @@ export const calculateOrderLines = (
     const subtotal = roundCurrency(gross - discountAmount);
     const taxAmount = vat ? roundCurrency(subtotal * (ivaRate / 100)) : 0;
 
-    return {
+   return {
+      cartItemId: item.cartItemId,
       productId: item.productId,
       quantity: item.quantity,
       unitPrice: product.price.toFixed(2),
@@ -46,5 +52,6 @@ export const calculateOrderLines = (
       ivaRateCode,
       selectedOptions: item.selectedOptions,
       clientId: item.clientId ?? null,
+      specialInstructions: item.specialInstructions ?? [],
     };
   });

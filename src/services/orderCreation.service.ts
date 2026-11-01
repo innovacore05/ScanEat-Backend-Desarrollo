@@ -6,12 +6,20 @@ import { CartError, type Tx } from "./sharedCart.service";
 
 type Lines = ReturnType<typeof calculateOrderLines>;
 
+type SpecialInstructionInput = {
+  cartItemId: number;
+  clientId: string;
+  unit: number;
+  instruction: string;
+};
+
 export const createOrderFromCart = async (
   tx: Tx,
   tableId: string,
   lines: Lines,
    chargesVat: boolean | null,  
   observation?: string | null,
+  specialInstructions: SpecialInstructionInput[] = [],
 ) => {
   const [table] = await tx
     .select({ id: tables.id })
@@ -84,6 +92,9 @@ export const createOrderFromCart = async (
       ivaRateCode: line.ivaRateCode,
       selectedOptions: line.selectedOptions,
       clientId: line.clientId,
+      specialInstructions: specialInstructions
+      .filter((instruction) => instruction.cartItemId === line.cartItemId)
+      .map(({ unit, instruction }) => ({ unit, instruction })),
     })),
   );
 
