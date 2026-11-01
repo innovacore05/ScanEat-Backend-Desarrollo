@@ -53,6 +53,10 @@ export const sharedCartItems = pgTable(
       .$type<Record<string, string>>()
       .notNull()
       .default({}),
+    specialInstructions: json("special_instructions")
+      .$type<{ unit: number; instruction: string }[]>()
+      .notNull()
+      .default([]),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

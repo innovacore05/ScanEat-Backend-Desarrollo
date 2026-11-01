@@ -9,8 +9,15 @@ import {
   roundCurrency,
   type ProductPricingData,
 } from "./orderPricing.service";
-import { emitToTable,emitOrderChanged } from "../socket";
+import {
+  clearTableReadyState,
+  emitToTable,
+  emitOrderChanged,
+  getConnectedClientIds,
+  getTableReadyClientIds,
+} from "../socket";
 import { createOrderFromCart } from "./orderCreation.service";
+import { getChargesVat } from "./regime.service";
 
 //limites del carrito, tiempo e 60 m y max de productos 
 const CART_TTL_MS = 60 * 60 * 1000; 
@@ -114,18 +121,32 @@ export const loadCartLines = async (executor: typeof db | Tx, cartId: string) =>
     ]),
   );
 
+  const [owner] = await executor
+    .select({ businessId: tables.businessId })
+    .from(sharedCarts)
+    .innerJoin(tables, eq(tables.id, sharedCarts.tableId))
+    .where(eq(sharedCarts.id, cartId))
+    .limit(1);
+
+  const chargesVat = owner
+    ? await getChargesVat(owner.businessId, executor)
+    : null;
+
   const lines = calculateOrderLines(
     rows.map((r) => ({
+      cartItemId: r.item.id,
       productId: r.item.productId,
       quantity: r.item.quantity,
       selectedOptions: r.item.selectedOptions ?? {},
       clientId: r.item.clientId,
     })),
     productData,
+    chargesVat,
   );
 
-  return { rows, lines };
+  return { rows, lines, chargesVat };
 };
+
 
 export const buildCartState = async (cart: Cart) => {
   const { rows, lines } = await loadCartLines(db, cart.id);
@@ -147,6 +168,7 @@ export const buildCartState = async (cart: Cart) => {
       productName: r.name,
       quantity: r.item.quantity,
       selectedOptions: r.item.selectedOptions ?? {},
+      specialInstructions: r.item.specialInstructions ?? [],
       unitPrice: Number(lines[i].unitPrice),
       lineTotal: roundCurrency(lines[i].subtotal + lines[i].taxAmount),
     })),
@@ -165,9 +187,28 @@ const broadcast = async (cart: Cart) => {
   return state;
 };
 
+type SpecialInstructionInput = {
+  cartItemId: number;
+  clientId: string;
+  unit: number;
+  instruction: string;
+};
 
-export const submitCart = async (tableId: string, observation?: string | null) => {
- const { cart, order, businessId } = await db.transaction(async (tx) => {
+export const submitCart = async (tableId: string, observation?: string | null, specialInstructions: SpecialInstructionInput[] = [],) => {
+  const connectedClients = await getConnectedClientIds(tableId);
+  if (connectedClients.length > 0) {
+    const readyClients = new Set(getTableReadyClientIds(tableId));
+    const allReady = connectedClients.every((clientId) => readyClients.has(clientId));
+
+    if (!allReady) {
+      throw new CartError(
+        409,
+        "Todos los clientes de la mesa deben marcar que están listos antes de confirmar",
+      );
+    }
+  }
+
+  const { cart, order, businessId } = await db.transaction(async (tx) => {
     // Bloquea el carrito
     const [cart] = await tx
       .select()
@@ -179,21 +220,59 @@ export const submitCart = async (tableId: string, observation?: string | null) =
     if (!cart) throw new CartError(409, "El carrito ya fue enviado o no existe");
     if (cart.expiresAt <= new Date()) throw new CartError(410, "El carrito expiró");
 
-    const { rows, lines } = await loadCartLines(tx, cart.id);
+    const { rows, lines, chargesVat } = await loadCartLines(tx, cart.id);
     if (rows.length === 0) throw new CartError(400, "El carrito está vacío");
 
+  // Obtener las instrucciones guardadas de todos los clientes.
+const allSpecialInstructions: SpecialInstructionInput[] =
+  rows.flatMap(({ item }) =>
+    (item.specialInstructions ?? []).map(({ unit, instruction }) => ({
+      cartItemId: item.id,
+      clientId: item.clientId,
+      unit,
+      instruction: instruction.trim(),
+    })),
+  );
+
+// Validar instrucciones especiales.
+for (const instruction of allSpecialInstructions) {
+  const cartItem = rows.find(
+    (row) => row.item.id === instruction.cartItemId,
+  );
+
+  if (!cartItem) {
+    throw new CartError(400, "Producto del carrito no encontrado");
+  }
+
+  if (instruction.unit > cartItem.item.quantity) {
+    throw new CartError(
+      400,
+      "La unidad indicada supera la cantidad del producto",
+    );
+  }
+
+  if (!instruction.instruction) {
+    throw new CartError(
+      400,
+      "Completa o elimina las instrucciones de preparación vacías",
+    );
+  }
+}
+
     const [table] = await tx
-  .select({ businessId: tables.businessId })
-  .from(tables)
-  .where(eq(tables.id, tableId))
-  .limit(1);
-if (!table) throw new CartError(404, "Mesa no encontrada");
+      .select({ businessId: tables.businessId })
+      .from(tables)
+      .where(eq(tables.id, tableId))
+      .limit(1);
+    if (!table) throw new CartError(404, "Mesa no encontrada");
 
     const order = await createOrderFromCart(
       tx,
       tableId,
       lines,
+      chargesVat,
       observation ?? cart.observation,
+      allSpecialInstructions,
     );
 
     await tx
@@ -209,7 +288,8 @@ if (!table) throw new CartError(404, "Mesa no encontrada");
     return { cart, order, businessId: table.businessId };
   });
 
-     try {
+  try {
+    clearTableReadyState(tableId);
     emitToTable(tableId, "cart:submitted", {
       tableId,
       cartId: cart.id,
@@ -217,11 +297,11 @@ if (!table) throw new CartError(404, "Mesa no encontrada");
     });
 
     emitOrderChanged({
-  order_id: order.orderId,
-  table_id: tableId,
-  state: orderStatuses.pending,
-  business_id: businessId,
-});
+      order_id: order.orderId,
+      table_id: tableId,
+      state: orderStatuses.pending,
+      business_id: businessId,
+    });
   } catch (e) {
     console.error("No se pudo emitir cart:submitted:", e);
   }
@@ -367,16 +447,64 @@ export const updateItemQuantity = async (
   itemId: number,
   clientId: string,
   quantity: number,
+  specialInstructions?: { unit: number; instruction: string }[],
 ) => {
   const { cart, item } = await loadItemForChange(tableId, itemId, clientId);
   const touched = await db.transaction(async (tx) => {
     const t = await touchCart(tx, cart.id);
     await tx
       .update(sharedCartItems)
-      .set({ quantity, updatedAt: new Date() })
+      .set({
+  quantity,
+  specialInstructions: (specialInstructions ?? item.specialInstructions ?? []).filter(
+    (instruction) => instruction.unit <= quantity),
+  updatedAt: new Date(),
+})
       .where(eq(sharedCartItems.id, item.id));
     return t;
   });
+  return broadcast(touched);
+};
+
+// Actualiza las instrucciones especiales de un producto del carrito
+export const updateItemSpecialInstructions = async (
+  tableId: string,
+  itemId: number,
+  clientId: string,
+  specialInstructions: { unit: number; instruction: string }[],
+) => {
+  // Busca el carrito y el producto que se desea modificar
+  const { cart, item } = await loadItemForChange(tableId, itemId, clientId);
+
+  // Valida que las instrucciones correspondan a unidades existentes
+  for (const instruction of specialInstructions) {
+    if (
+      !Number.isInteger(instruction.unit) ||
+      instruction.unit < 1 ||
+      instruction.unit > item.quantity ||
+      !instruction.instruction.trim() ||
+      instruction.instruction.length > 500
+    ) {
+      throw new CartError(400, "Las instrucciones de preparación no son válidas");
+    }
+  }
+
+   // Guarda las instrucciones y actualiza la fecha de modificación del carrito
+  const touched = await db.transaction(async (tx) => {
+    const t = await touchCart(tx, cart.id);
+
+    await tx
+      .update(sharedCartItems)
+      .set({
+        specialInstructions,
+        updatedAt: new Date(),
+      })
+      .where(eq(sharedCartItems.id, item.id));
+
+    return t;
+  });
+
+  // Notifica los cambios del carrito a los demás usuarios
   return broadcast(touched);
 };
 

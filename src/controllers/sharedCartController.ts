@@ -15,6 +15,12 @@ const addBody = z.object({
 const qtyBody = z.object({
   clientId: z.uuid(),
   quantity: z.coerce.number().int().positive().max(99),
+  specialInstructions: z.array(
+    z.object({
+      unit: z.number().int().positive(),
+      instruction: z.string().trim().max(500),
+    }),
+  ).optional(),
 });
 
 const handle =
@@ -49,9 +55,9 @@ export const addItem = handle(async (req, res) => {
 
 export const updateItem = handle(async (req, res) => {
   const { tableId, itemId } = itemParams.parse(req.params);
-  const { clientId, quantity } = qtyBody.parse(req.body);
+  const { clientId, quantity, specialInstructions } = qtyBody.parse(req.body);
   res.status(200).json(
-    await cartService.updateItemQuantity(tableId, itemId, clientId, quantity),
+    await cartService.updateItemQuantity(tableId, itemId, clientId, quantity, specialInstructions),
   );
 });
 
@@ -61,12 +67,31 @@ export const removeItem = handle(async (req, res) => {
   res.status(200).json(await cartService.removeItem(tableId, itemId, clientId));
 });
 
+// Define y valida los datos necesarios para crear una orden
 const submitBody = z.object({
   observation: z.string().trim().max(500).optional(),
+  // Valida las instrucciones especiales de cada unidad
+  specialInstructions: z.array(
+    z.object({
+      cartItemId: z.coerce.number().int().positive(),
+      clientId: z.string().uuid(),
+      unit: z.number().int().positive(),
+      instruction: z.string().trim().min(1).max(500),
+    }),
+  ).optional().default([]),
 });
 
+// Procesa la solicitud para crear una orden
 export const submitCart = handle(async (req, res) => {
   const { tableId } = tableParams.parse(req.params);
-  const { observation } = submitBody.parse(req.body ?? {});
-  res.status(201).json({ order: await cartService.submitCart(tableId, observation) });
+  // Obtiene y valida los datos enviados
+  const { observation, specialInstructions } = submitBody.parse(req.body ?? {});
+  // Crea la orden y devuelve el resultado
+  res.status(201).json({
+    order: await cartService.submitCart(
+      tableId,
+      observation,
+      specialInstructions,
+    ),
+  });
 });
