@@ -19,7 +19,7 @@ import multer from "multer";
 import sharedCartRoutes from "./src/routes/sharedCartRoutes";
 import expensesRoutes from "./src/routes/expensesRoutes";
 import issuerRoutes from "./src/routes/issuerRoutes";
-
+import receiptsRoutes from "./src/routes/receiptRoutes";
 
 import { createServer } from "http";
 import { initSocket } from "./src/socket";
@@ -39,6 +39,7 @@ app.use("/api/ai", aiRoutes);
 app.use("/api/shared-carts", sharedCartRoutes);
 app.use("/api/expenses", expensesRoutes);
 app.use("/api/issuer", issuerRoutes);
+app.use("/api/receipts", receiptsRoutes);
 
 app.use('/api', (req, res) =>{
     res.status(404).json({ message: 'Endpoint not found' });
