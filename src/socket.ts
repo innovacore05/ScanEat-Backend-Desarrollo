@@ -266,9 +266,17 @@ export const emitOrderChanged = (order: {
   emitToStaff(order.business_id, "kitchen_orders_updated", payload);
   emitToStaff(order.business_id, "waiter_orders_updated", payload);
   emitToStaff(order.business_id, "cashier_orders_updated", payload);
+
+  // Sonido para cocina: cada pedido nuevo
+  if (order.state === "preparing") {
+    emitToStaff(order.business_id, "kitchen:new-order", payload);
+  }
+
+  // Sonido para meseros: pedido listo para entregar
+  if (order.state === "ready") {
+    emitToStaff(order.business_id, "waiter:order-ready", payload);
+  }
 };
-
-
 
 export const getConnectedClientIds = async (
   tableId: string
