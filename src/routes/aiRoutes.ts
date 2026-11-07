@@ -12,7 +12,7 @@ const router = Router();
 
 router.get("/test", testGemini);
 
-router.post("/sales-report",authenticate,requireRole(1, 2, 3, 4),createSalesReport,);
+router.post("/sales-report",authenticate,requireRole(1,3),createSalesReport,);
 router.post("/menu-chat", createMenuChat);
 
 export default router;

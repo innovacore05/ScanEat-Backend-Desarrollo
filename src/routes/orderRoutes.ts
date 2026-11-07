@@ -25,7 +25,7 @@ router.get("/", authenticate, requireRole(1, 2, 3,4), getOrders);
 //nuevo
 router.get("/active/:tableId", getActiveOrder);
 
-router.get("/analytics",authenticate,requireRole(1, 2, 3, 4),getSalesAnalytics,);
+router.get("/analytics",authenticate,requireRole(1,3),getSalesAnalytics,);
 router.get("/:id/status", getOrderStatus);
 router.patch("/:id/confirm", authenticate, requireRole(3), confirmOrder);
 router.patch("/:id/ready", authenticate,requireRole(2), markOrderReady);
