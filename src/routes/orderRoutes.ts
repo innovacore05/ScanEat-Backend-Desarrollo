@@ -11,6 +11,8 @@ import {
   getActiveOrder,
   getSalesAnalytics,
   addItemsToOrder,
+  updateOrderItem,
+  deleteOrderItem,
   getKitchenOrders,
 } from "../controllers/orderController";
 import { validateBody } from "../middleware/validations";
@@ -25,12 +27,14 @@ router.get("/", authenticate, requireRole(1, 2, 3,4), getOrders);
 //nuevo
 router.get("/active/:tableId", getActiveOrder);
 
-router.get("/analytics",authenticate,requireRole(1, 2, 3, 4),getSalesAnalytics,);
+router.get("/analytics",authenticate,requireRole(1,3),getSalesAnalytics,);
 router.get("/:id/status", getOrderStatus);
 router.patch("/:id/confirm", authenticate, requireRole(3), confirmOrder);
 router.patch("/:id/ready", authenticate,requireRole(2), markOrderReady);
 router.patch("/:id/deliver", authenticate, requireRole(3), deliverOrder);
 router.post("/:orderId/items", authenticate, requireRole(3, 4), addItemsToOrder,);
+router.patch("/:orderId/items/:detailId", authenticate, requireRole(3), updateOrderItem);
+router.delete("/:orderId/items/:detailId", authenticate, requireRole(3), deleteOrderItem);
 router.get("/kitchen", authenticate,requireRole(2), getKitchenOrders,);
 router.patch("/:id/kitchen-ready", authenticate, requireRole(2), markKitchenOrderReady,);
 // Esta ruta solo calcula y devuelve los montos

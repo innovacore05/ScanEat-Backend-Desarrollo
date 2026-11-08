@@ -249,3 +249,38 @@ export const refreshReceiptStatus = async (
 
   return updated;
 };
+
+//---solicitud de descarga 
+export const downloadFacturaEnCrFile = async (
+  path: string,
+  legalId: string,
+) => {
+  const apiKey = process.env.FACTURAENCR_API_KEY;
+  const apiSecret = process.env.FACTURAENCR_API_SECRET;
+
+  if (!apiKey || !apiSecret) {
+    throw new Error("Faltan las credenciales de Factura en CR");
+  }
+
+  const response = await fetch(`${BASE_URL}${path}`, {
+    method: "GET",
+    headers: {
+      "X-API-Key": apiKey,
+      "X-API-Secret": apiSecret,
+      "X-Emisor": legalId,
+      Accept: "application/xml, application/zip",
+    },
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Factura en CR respondió ${response.status}`);
+  }
+
+  return {
+    contentType:
+      response.headers.get("content-type") ?? "application/xml",
+    body: Buffer.from(await response.arrayBuffer()),
+  };
+};

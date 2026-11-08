@@ -56,7 +56,6 @@ if (!user) {
   });
 }
     req.user = user;
-    console.log("AUTH USER:", user);
     next();
   } catch {
   return res.status(401).json({

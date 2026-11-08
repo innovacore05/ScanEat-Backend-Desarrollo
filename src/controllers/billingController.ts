@@ -933,7 +933,43 @@ export const retryReceiptEmission = async (
         haciendaStatus: receipt.haciendaStatus,
       });
     }
+if (receipt.documentType !== "04") {
+  return res.status(409).json({
+    message: "Solo se puede reintentar la emisión de tiquetes.",
+  });
+}
 
+let substituteKey: string | undefined;
+
+if (receipt.replacesReceiptId !== null) {
+  const [original] = await db
+    .select({
+      documentType: receipts.documentType,
+      haciendaStatus: receipts.haciendaStatus,
+      clave: receipts.clave,
+    })
+    .from(receipts)
+    .where(
+      and(
+        eq(receipts.receiptId, receipt.replacesReceiptId),
+        eq(receipts.businessId, businessId),
+      ),
+    )
+    .limit(1);
+
+  if (
+    !original ||
+    original.documentType !== "04" ||
+    original.haciendaStatus !== "rejected" ||
+    !original.clave
+  ) {
+    return res.status(409).json({
+      message: "No se pudo validar el tiquete original del reemplazo.",
+    });
+  }
+
+  substituteKey = original.clave;
+}
     // La Idempotency-Key de Factura en CR tiene una ventana de 24 horas.
     // Usamos 23 para dejar margen respecto al momento exacto del primer envío.
     const safeRetryWindowMs = 23 * 60 * 60 * 1000;
@@ -1059,6 +1095,7 @@ export const retryReceiptEmission = async (
       // Usa los códigos y tarifas guardados en cada línea.
       chargesVat: true,
       paymentMethod,
+  substituteKey,
     });
 
     if (!emission.ok) {
@@ -1120,9 +1157,13 @@ export const replaceRejectedReceipt = async (
       return res.status(404).json({ message: "Recibo no encontrado" });
     }
 
-    if (original.haciendaStatus !== "rejected" || !original.clave) {
+   if (
+  original.haciendaStatus !== "rejected" ||
+  !original.clave ||
+  original.documentType !== "04"
+) {
       return res.status(409).json({
-        message: "Solo se puede sustituir un recibo rechazado con clave",
+         message: "Solo se puede reemplazar automáticamente un tiquete rechazado.",
         haciendaStatus: original.haciendaStatus,
       });
     }

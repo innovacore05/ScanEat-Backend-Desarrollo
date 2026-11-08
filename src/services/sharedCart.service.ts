@@ -18,6 +18,7 @@ import {
 } from "../socket";
 import { createOrderFromCart } from "./orderCreation.service";
 import { getChargesVat } from "./regime.service";
+import { correctSpecialInstruction } from "./geminiService";
 
 //limites del carrito, tiempo e 60 m y max de productos 
 const CART_TTL_MS = 60 * 60 * 1000; 
@@ -429,10 +430,25 @@ export const addItem = async (
 
 // El ítem debe pertenecer al carrito abierto de ESA mesa y ser de quien lo modifica.
 const loadItemForChange = async (tableId: string, itemId: number, clientId: string) => {
-  const cart = await requireLiveCart(tableId);
+  const cart = await requireLiveCart(tableId);    
   const [item] = await db
-    .select()
+    .select({
+      id: sharedCartItems.id,
+      cartId: sharedCartItems.cartId,
+      clientId: sharedCartItems.clientId,
+      productId: sharedCartItems.productId,
+      productName: products.productName,
+      quantity: sharedCartItems.quantity,
+      selectedOptions: sharedCartItems.selectedOptions,
+      specialInstructions: sharedCartItems.specialInstructions,
+      createdAt: sharedCartItems.createdAt,
+      updatedAt: sharedCartItems.updatedAt,
+    })
     .from(sharedCartItems)
+    .innerJoin(
+  products,
+  eq(sharedCartItems.productId, products.productId),
+)
     .where(and(eq(sharedCartItems.id, itemId), eq(sharedCartItems.cartId, cart.id)))
     .limit(1);
   if (!item) throw new CartError(404, "Producto no encontrado en el carrito");
@@ -442,6 +458,7 @@ const loadItemForChange = async (tableId: string, itemId: number, clientId: stri
   return { cart, item };
 };
 
+
 export const updateItemQuantity = async (
   tableId: string,
   itemId: number,
@@ -450,21 +467,80 @@ export const updateItemQuantity = async (
   specialInstructions?: { unit: number; instruction: string }[],
 ) => {
   const { cart, item } = await loadItemForChange(tableId, itemId, clientId);
+
+  // Determinar las instrucciones que se van a guardar.
+  const instructionsToSave = (
+    specialInstructions ?? item.specialInstructions ?? []
+  ).filter((instruction) => instruction.unit <= quantity);
+
+  // Solo corregir cuando el frontend envía instrucciones explícitamente.
+  if (specialInstructions !== undefined) {
+    const previousInstructions = new Map(
+      (item.specialInstructions ?? []).map(({ unit, instruction }) => [
+        unit,
+        instruction,
+      ]),
+    );
+
+    
+    for (const instruction of instructionsToSave) {
+      const originalText = instruction.instruction;
+      const previousText = previousInstructions.get(instruction.unit) ?? "";
+
+      // Permitir instrucciones vacías mientras el cliente escribe.
+      if (!originalText.trim()) continue;
+
+      // No volver a procesar instrucciones que no cambiaron.
+      if (originalText.trim() === previousText.trim()) continue;
+
+      try {
+        const result = await correctSpecialInstruction(
+          item.productName,
+          originalText,
+        );
+
+        if (!result.valid) {
+          throw new CartError(
+            400,
+            result.reason ?? "La instrucción no está relacionada con el producto.",
+          );
+        }
+
+        instruction.instruction =
+          result.correctedInstruction!.trim();
+      } catch (error) {
+        if (error instanceof CartError) {
+          throw error;
+        }
+
+        console.error("Error al validar la instrucción con Gemini:", error);
+
+        throw new CartError(
+          503,
+          "No fue posible validar la instrucción. Inténtalo nuevamente.",
+        );
+      }
+    }
+  }
+
   const touched = await db.transaction(async (tx) => {
     const t = await touchCart(tx, cart.id);
+
     await tx
       .update(sharedCartItems)
       .set({
-  quantity,
-  specialInstructions: (specialInstructions ?? item.specialInstructions ?? []).filter(
-    (instruction) => instruction.unit <= quantity),
-  updatedAt: new Date(),
-})
+        quantity,
+        specialInstructions: instructionsToSave,
+        updatedAt: new Date(),
+      })
       .where(eq(sharedCartItems.id, item.id));
+
     return t;
   });
+
   return broadcast(touched);
 };
+
 
 // Actualiza las instrucciones especiales de un producto del carrito
 export const updateItemSpecialInstructions = async (
