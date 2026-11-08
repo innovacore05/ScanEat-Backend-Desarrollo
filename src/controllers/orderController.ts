@@ -50,6 +50,54 @@ const addItemsSchema = z.object({
   ).min(1),
 });
 
+const updateItemSchema = z.object({
+  quantity: z.coerce.number().int().positive(),
+  specialInstructions: z.array(
+    z.object({
+      unit: z.number().int().positive(),
+      instruction: z.string().trim().min(1).max(500),
+    }),
+  ).optional().default([]),
+});
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+// Bloquea la orden del negocio; solo permite modificarla si está pendiente
+const lockPendingOrder = async (tx: Tx, orderId: number, businessId: number) => {
+  const [row] = await tx
+    .select({ order: orders })
+    .from(orders)
+    .innerJoin(tables, eq(orders.tableId, tables.id))
+    .where(and(eq(orders.orderId, orderId), eq(tables.businessId, businessId)))
+    .for("update")
+    .limit(1);
+
+  if (!row) return { type: "not-found" as const };
+  if (row.order.state !== orderStatuses.pending) {
+    return { type: "not-pending" as const };
+  }
+  return { type: "ok" as const, order: row.order };
+};
+
+const recalculateOrderTotals = async (tx: Tx, orderId: number) => {
+  const details = await tx
+    .select({ subtotal: orderDetails.subtotal, taxAmount: orderDetails.taxAmount })
+    .from(orderDetails)
+    .where(eq(orderDetails.orderId, orderId));
+
+  const subtotal = roundCurrency(details.reduce((s, d) => s + Number(d.subtotal), 0));
+  const tax = roundCurrency(details.reduce((s, d) => s + Number(d.taxAmount ?? 0), 0));
+  const total = roundCurrency(subtotal + tax);
+
+  const [updated] = await tx
+    .update(orders)
+    .set({ subtotal: subtotal.toFixed(2), tax: tax.toFixed(2), total: total.toFixed(2) })
+    .where(eq(orders.orderId, orderId))
+    .returning();
+
+  return updated;
+};
+
 //validar descuentos antuos o guardados que no sean del formulario
 const hasValidDiscount = (value: unknown): boolean => {
   const discount = Number(value ?? 0);
@@ -1698,6 +1746,142 @@ if (invalidInstructions) {
     return res.status(500).json({
       message: "No se pudieron agregar los productos",
     });
+  }
+};
+
+export const updateOrderItem = async (req: AuthRequest, res: Response) => {
+  try {
+    const orderId = Number(req.params.orderId);
+    const detailId = Number(req.params.detailId);
+    const businessId = req.user?.business_id;
+
+    if (!Number.isInteger(orderId) || orderId <= 0 || !Number.isInteger(detailId) || detailId <= 0) {
+      return res.status(400).json({ message: "Los identificadores no son válidos" });
+    }
+    if (!businessId) {
+      return res.status(400).json({ message: "El usuario no tiene un negocio asociado" });
+    }
+
+    const parsed = updateItemSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: "Los datos no son válidos", errors: parsed.error.flatten() });
+    }
+    const { quantity, specialInstructions } = parsed.data;
+
+    if (specialInstructions.some((i) => i.unit > quantity)) {
+      return res.status(400).json({ message: "La unidad indicada supera la cantidad del producto" });
+    }
+
+    const result = await db.transaction(async (tx) => {
+      const locked = await lockPendingOrder(tx, orderId, businessId);
+      if (locked.type !== "ok") return locked;
+
+      const [detail] = await tx
+        .select()
+        .from(orderDetails)
+        .where(and(eq(orderDetails.detailId, detailId), eq(orderDetails.orderId, orderId)))
+        .limit(1);
+      if (!detail) return { type: "detail-not-found" as const };
+
+      // Se recalcula con el precio, descuento e IVA ya guardados en la línea
+      const unitPrice = Number(detail.unitPrice);
+      const oldGross = unitPrice * Number(detail.quantity);
+      const discountPct = oldGross > 0 ? Number(detail.discountAmount ?? 0) / oldGross : 0;
+      const ivaRate = Number(detail.ivaRate ?? 0);
+
+      const gross = roundCurrency(unitPrice * quantity);
+      const discountAmount = roundCurrency(gross * discountPct);
+      const subtotal = roundCurrency(gross - discountAmount);
+      const taxAmount = roundCurrency(subtotal * (ivaRate / 100));
+
+      await tx
+        .update(orderDetails)
+        .set({
+          quantity,
+          discountAmount: discountAmount.toFixed(2),
+          subtotal: subtotal.toFixed(2),
+          taxAmount: taxAmount.toFixed(2),
+          specialInstructions,
+        })
+        .where(eq(orderDetails.detailId, detailId));
+
+      const order = await recalculateOrderTotals(tx, orderId);
+      return { type: "success" as const, order };
+    });
+
+    if (result.type === "not-found") return res.status(404).json({ message: "Orden no encontrada" });
+    if (result.type === "detail-not-found") return res.status(404).json({ message: "Producto no encontrado en la orden" });
+    if (result.type === "not-pending") {
+      return res.status(409).json({ message: "Solo se pueden modificar órdenes pendientes" });
+    }
+
+    emitOrderChanged({
+      order_id: result.order.orderId,
+      table_id: result.order.tableId,
+      state: result.order.state,
+      business_id: businessId,
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error("Error editando producto de la orden:", error);
+    return res.status(500).json({ message: "No se pudo editar el producto" });
+  }
+};
+
+export const deleteOrderItem = async (req: AuthRequest, res: Response) => {
+  try {
+    const orderId = Number(req.params.orderId);
+    const detailId = Number(req.params.detailId);
+    const businessId = req.user?.business_id;
+
+    if (!Number.isInteger(orderId) || orderId <= 0 || !Number.isInteger(detailId) || detailId <= 0) {
+      return res.status(400).json({ message: "Los identificadores no son válidos" });
+    }
+    if (!businessId) {
+      return res.status(400).json({ message: "El usuario no tiene un negocio asociado" });
+    }
+
+    const result = await db.transaction(async (tx) => {
+      const locked = await lockPendingOrder(tx, orderId, businessId);
+      if (locked.type !== "ok") return locked;
+
+      const lines = await tx
+        .select({ detailId: orderDetails.detailId })
+        .from(orderDetails)
+        .where(eq(orderDetails.orderId, orderId));
+
+      if (!lines.some((l) => l.detailId === detailId)) {
+        return { type: "detail-not-found" as const };
+      }
+      if (lines.length === 1) return { type: "last-item" as const };
+
+      await tx.delete(orderDetails).where(eq(orderDetails.detailId, detailId));
+
+      const order = await recalculateOrderTotals(tx, orderId);
+      return { type: "success" as const, order };
+    });
+
+    if (result.type === "not-found") return res.status(404).json({ message: "Orden no encontrada" });
+    if (result.type === "detail-not-found") return res.status(404).json({ message: "Producto no encontrado en la orden" });
+    if (result.type === "not-pending") {
+      return res.status(409).json({ message: "Solo se pueden modificar órdenes pendientes" });
+    }
+    if (result.type === "last-item") {
+      return res.status(409).json({ message: "No se puede eliminar el único producto de la orden" });
+    }
+
+    emitOrderChanged({
+      order_id: result.order.orderId,
+      table_id: result.order.tableId,
+      state: result.order.state,
+      business_id: businessId,
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error("Error eliminando producto de la orden:", error);
+    return res.status(500).json({ message: "No se pudo eliminar el producto" });
   }
 };
 
