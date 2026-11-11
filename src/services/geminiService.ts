@@ -336,6 +336,7 @@ Si no es válida:
     throw new Error("Gemini devolvió una respuesta inválida");
   }
 
+  
   const parsed = specialInstructionSchema.safeParse(parsedJson);
 
   if (!parsed.success) {
