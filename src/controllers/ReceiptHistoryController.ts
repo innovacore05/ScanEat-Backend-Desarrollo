@@ -60,9 +60,9 @@ export const listIssuedReceipts = async (
 
     if (status === "accepted" || status === "rejected") {
       conditions.push(eq(receipts.haciendaStatus, status));
-    } else if (status === "failed") {
-      conditions.push(eq(receipts.haciendaStatus, "not_sent"));
-    } else if (status === "in_progress") {
+   } else if (status === "failed") {
+  conditions.push(inArray(receipts.haciendaStatus, ["failed", "not_sent"]));
+} else if (status === "in_progress") {
       conditions.push(inArray(receipts.haciendaStatus, IN_PROGRESS));
     } else if (status !== "") {
       return res.status(400).json({ message: "El filtro de estado no es válido." });

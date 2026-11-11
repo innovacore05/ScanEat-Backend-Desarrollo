@@ -23,7 +23,7 @@ import receiptsRoutes from "./src/routes/receiptRoutes";
 
 import { createServer } from "http";
 import { initSocket } from "./src/socket";
-
+import { startReceiptEmissionWorker } from './src/services/receiptEmissionWorker.service';
 
 app.use('/api/auth', authRoutes);
 app.use("/api/menu",menuRoutes);
@@ -81,6 +81,8 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 const httpServer = createServer(app);
 
 initSocket(httpServer);
+startReceiptEmissionWorker(); 
+
 
 httpServer.listen(env.PORT, () => {
   console.log(`Server running on port ${env.PORT}`);
