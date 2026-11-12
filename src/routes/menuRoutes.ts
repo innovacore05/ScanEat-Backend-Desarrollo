@@ -4,6 +4,7 @@ import {
   createProduct,
   getProducts,
   getProductsById,
+  getProductImage,
   createCustomDish,
   getCategories,
   createCategory,
@@ -27,7 +28,8 @@ import { getFiscalOptions, searchCabys } from "../controllers/cabysController";
 const router = Router();
 
 router.get("/products",optionalAuthenticate, getProducts);
-router.get("/products/:id",getProductsById);
+router.get("/products/:id", getProductsById);
+router.get("/products/:id/image", authenticate, requireRole(1), getProductImage);
 router.get("/categories", optionalAuthenticate, getCategories);
 router.post("/categories", authenticate, requireRole(1), validateBody(createCategorySchema), createCategory);
 router.delete("/categories/:id",authenticate,requireRole(1),deleteCategory);
