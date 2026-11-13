@@ -1,9 +1,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Request, Response } from "express";
-import { and, eq, notInArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 import db from "../db/connection";
 import { receipts } from "../db/schemas/billingSchema";
+import { refreshReceiptStatus } from "../services/factura.service";
 
 function isValidSignature(
   rawBody: Buffer,
@@ -95,59 +96,34 @@ if (event.data?.test === true) {
     return res.sendStatus(400);
   }
 
-  let haciendaStatus: "accepted" | "rejected";
+  if (
+  event.event !== "document.accepted" &&
+  event.event !== "document.rejected"
+) {
+  return res.sendStatus(200);
+}
 
-  if (event.event === "document.accepted") {
-    haciendaStatus = "accepted";
-  } else if (event.event === "document.rejected") {
-    haciendaStatus = "rejected";
-  } else {
-    // Evento que este endpoint no necesita procesar.
-    return res.sendStatus(200);
-  }
+try {
+  const [receipt] = await db
+    .select({
+      receiptId: receipts.receiptId,
+      businessId: receipts.businessId,
+    })
+    .from(receipts)
+    .where(eq(receipts.integratorDocumentId, event.documentId))
+    .limit(1);
 
-  const messageValue =
-    event.haciendaMessage ?? event.data?.haciendaMessage;
-
-  const haciendaMessage =
-    typeof messageValue === "string" ? messageValue : null;
-
-  try {
-    // Actualiza solo si el recibo aún no tiene un estado final.
-    const [updated] = await db
-      .update(receipts)
-      .set({
-        haciendaStatus,
-        haciendaMessage,
-      })
-      .where(
-        and(
-          eq(receipts.integratorDocumentId, event.documentId),
-          notInArray(receipts.haciendaStatus, ["accepted", "rejected"]),
-        ),
-      )
-      .returning({ receiptId: receipts.receiptId });
-
-    if (updated) {
-      return res.sendStatus(200);
-    }
-
-    // Si ya era final, este aviso es repetido o llegó fuera de orden.
-    // Se reconoce para que Facturaencr no tenga que volver a enviarlo.
-    const [existing] = await db
-      .select({ receiptId: receipts.receiptId })
-      .from(receipts)
-      .where(eq(receipts.integratorDocumentId, event.documentId))
-      .limit(1);
-
-    if (existing) {
-      return res.sendStatus(200);
-    }
-
-    // El recibo todavía no está asociado a ese documentId; pide reintento.
-    return res.sendStatus(503);
-  } catch (error) {
-    console.error("Error procesando webhook de Facturaencr:", error);
+  if (!receipt) {
     return res.sendStatus(503);
   }
+
+  await refreshReceiptStatus(receipt.receiptId, receipt.businessId, {
+    force: true,
+  });
+
+  return res.sendStatus(200);
+} catch (error) {
+  console.error("Error procesando webhook de Facturaencr:", error);
+  return res.sendStatus(503);
+}
 }

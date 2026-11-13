@@ -13,7 +13,12 @@ import { emitTiquete } from "./factura.service";
 
 export type QueueEmissionResult =
   | { ok: true }
-  | { ok: false; retryable: boolean; message: string };
+  | {
+      ok: false;
+      retryable: boolean;
+      message: string;
+      retryAfterSeconds?: number;
+    };
 
 const permanentFailure = (message: string): QueueEmissionResult => ({
   ok: false,
@@ -218,5 +223,6 @@ export async function emitReceiptForQueue(
     ok: false,
     retryable,
     message: emission.message,
+    retryAfterSeconds: emission.retryAfterSeconds
   };
 }

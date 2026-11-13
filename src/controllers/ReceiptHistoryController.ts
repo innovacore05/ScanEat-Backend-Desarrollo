@@ -133,7 +133,7 @@ export const listIssuedReceipts = async (
     );
 
     const summary = summaryRows[0];
-
+    res.setHeader("Cache-Control", "no-store");
     return res.json({
       items: rows.map((row) => ({
         id: String(row.receiptId),

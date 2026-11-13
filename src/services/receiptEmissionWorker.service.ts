@@ -74,6 +74,7 @@ async function markFailed(
   jobId: number,
   receiptId: number,
   message: string,
+
 ) {
   await db.transaction(async (tx) => {
     await tx
@@ -99,11 +100,21 @@ async function scheduleRetry(
   jobId: number,
   message: string,
   attempts: number,
+  retryAfterSeconds?: number,
 ) {
-  // Reintentos después de 1, 2, 4, 8 minutos, hasta un máximo de 30.
-  const delayMinutes = Math.min(2 ** Math.max(attempts - 1, 0), 30);
-  const availableAt = new Date(Date.now() + delayMinutes * 60_000);
+  // Reintentos después de 1, 2, 4, 8 minutos.
+  const fallbackDelayMinutes = Math.min(
+  2 ** Math.max(attempts - 1, 0),
+  30,
+);
 
+const delayMs =
+  typeof retryAfterSeconds === "number" &&
+  Number.isFinite(retryAfterSeconds)
+    ? Math.max(retryAfterSeconds, 1) * 1000
+    : fallbackDelayMinutes * 60_000;
+
+const availableAt = new Date(Date.now() + delayMs);
   await db
     .update(receiptEmissionJobs)
     .set({
@@ -132,7 +143,12 @@ async function processOneJob() {
       return;
     }
 
-    await scheduleRetry(job.jobId, result.message, job.attempts);
+    await scheduleRetry(
+  job.jobId,
+  result.message,
+  job.attempts,
+  result.retryAfterSeconds,
+);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Error desconocido";

@@ -11,7 +11,7 @@ import db from "./db/connection";
 import { users } from "./db/schemas/userSchema";
 
 const staffRoom = (businessId: number) => `staff:${businessId}`;
-const STAFF_ROLE_IDS = [2, 3, 4]; 
+const STAFF_ROLE_IDS = [1,2, 3, 4]; 
 const AUTH_COOKIE_NAME = "token";
 
 let io: Server | null = null;
