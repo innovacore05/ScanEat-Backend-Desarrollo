@@ -106,6 +106,7 @@ export const getProducts = async (
     rating: products.rating,
     categoryId: products.categoryId,
     discount: products.discount,
+    isAvailable: products.isAvailable,
     ivaRate: products.ivaRate,
     ivaRateCode: products.ivaRateCode,
   })
@@ -167,6 +168,45 @@ const formatted = result.map((product) => {
     res.status(500).json({
       message: "Error al obtener los productos",
     });
+  }
+};
+
+export const updateProductAvailability = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    const productId = Number(req.params.id);
+    const businessId = req.user?.business_id;
+    const isAvailable = req.body?.isAvailable;
+
+    if (!businessId) {
+      return res.status(400).json({ message: "El usuario no tiene un negocio asociado" });
+    }
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({ message: "ID de producto inválido" });
+    }
+    if (typeof isAvailable !== "boolean") {
+      return res.status(400).json({ message: "La disponibilidad debe ser un valor booleano" });
+    }
+
+    const [product] = await db
+      .update(products)
+      .set({ isAvailable })
+      .where(and(eq(products.productId, productId), eq(products.businessId, businessId)))
+      .returning();
+
+    if (!product) {
+      return res.status(404).json({ message: "Producto no encontrado" });
+    }
+
+    return res.status(200).json({
+      message: isAvailable ? "Platillo marcado como disponible" : "Platillo marcado como agotado",
+      product: { ...product, price: Number(product.price), discount: Number(product.discount ?? 0) },
+    });
+  } catch (error) {
+    console.error("Error updating product availability:", error);
+    return res.status(500).json({ message: "Error al actualizar la disponibilidad del platillo" });
   }
 };
 
@@ -1326,4 +1366,3 @@ export const deleteCustomProduct = async (req: AuthRequest, res: Response) => {
     return res.status(500).json({ message: "Error al eliminar el platillo personalizado" });
   }
 };
-
