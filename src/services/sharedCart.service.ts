@@ -252,12 +252,6 @@ for (const instruction of allSpecialInstructions) {
     );
   }
 
-  if (!instruction.instruction) {
-    throw new CartError(
-      400,
-      "Completa o elimina las instrucciones de preparación vacías",
-    );
-  }
 }
 
     const [table] = await tx

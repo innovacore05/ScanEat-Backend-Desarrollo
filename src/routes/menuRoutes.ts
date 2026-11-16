@@ -4,6 +4,7 @@ import {
   createProduct,
   getProducts,
   getProductsById,
+  getProductImage,
   createCustomDish,
   getCategories,
   createCategory,
@@ -13,6 +14,7 @@ import {
   updateCustomDish,
   deleteProduct,
   deleteCustomProduct,
+  updateProductAvailability,
 
 } from "../controllers/adminMenuController";
 import { upload } from "../middleware/upload";
@@ -27,7 +29,8 @@ import { getFiscalOptions, searchCabys } from "../controllers/cabysController";
 const router = Router();
 
 router.get("/products",optionalAuthenticate, getProducts);
-router.get("/products/:id",getProductsById);
+router.get("/products/:id", getProductsById);
+router.get("/products/:id/image", authenticate, requireRole(1), getProductImage);
 router.get("/categories", optionalAuthenticate, getCategories);
 router.post("/categories", authenticate, requireRole(1), validateBody(createCategorySchema), createCategory);
 router.delete("/categories/:id",authenticate,requireRole(1),deleteCategory);
@@ -38,6 +41,7 @@ router.put("/categories/:id",authenticate,requireRole(1),updateCategory);
 
 router.post("/products",authenticate,requireRole(1),upload.single("image"),validateBody(createProductSchema),createProduct);
 router.put("/products/:id",authenticate,requireRole(1), upload.single("image"), updateProduct);
+router.patch("/products/:id/availability", authenticate, requireRole(1, 3), updateProductAvailability);
 router.patch("/products/:id",authenticate,requireRole(1), upload.single("image"), updateProduct);
 router.delete("/products/:id",authenticate,requireRole(1), deleteProduct);
 

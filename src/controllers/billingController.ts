@@ -1,5 +1,5 @@
 import { Response } from "express";
-import { and, eq, isNull, sql ,asc} from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, sql, asc } from "drizzle-orm";
 import { z } from "zod";
 import { AuthRequest } from "../middleware/authenticate";
 import db from "../db/connection";
@@ -7,7 +7,8 @@ import { orderDetails, orders, orderStatuses } from "../db/schemas/orderSchema";
 import { tables } from "../db/schemas/mesaSchema";
 import { products } from "../db/schemas/adminMenuSchema";
 
-import  {invoicingConfig,payments, receiptDetails, receiptTaxes,receipts } from "../db/schemas/billingSchema";
+import  {invoicingConfig,payments, receiptDetails, 
+  receiptTaxes,receipts,receiptEmissionJobs, } from "../db/schemas/billingSchema";
 
 import { sharedCarts } from "../db/schemas/sharedCartSchema";
 import { emitToTable, emitOrderChanged } from "../socket";
@@ -686,10 +687,16 @@ TiquetePayloadBuilder.build({
           totalOtherCharges: totals.totalOtherCharges,
           totalVoucher: totals.totalVoucher,
           cashierId,
+          // El tiquete pendiente de envío
+           haciendaStatus: "pending",
         })
         .returning();
+await tx
+  .insert(receiptEmissionJobs)
+  .values({ receiptId: receipt.receiptId });
 
-      // cabys:guardar el CABYS real del detalle del pedido
+      
+  // cabys:guardar el CABYS real del detalle del pedido
          const savedReceiptLines = await tx
         .insert(receiptDetails)
         .values(
@@ -842,18 +849,20 @@ const change =
         business_id: table.businessId,
       });
     }
-const emitted = await emitTiquete({
-      receiptId: createdReceipt.receiptId,
-      orderId,
-      issuer,
-      lines,
-      total: totals.totalVoucher,
-      serviceCharge: totals.serviceCharge,
-      chargesVat: issuer.chargesVat !== false,
-      paymentMethod: payload.method,
-    });
+// const emitted = await emitTiquete({
+//       receiptId: createdReceipt.receiptId,
+//       orderId,
+//       issuer,
+
+//       lines,
+//       total: totals.totalVoucher,
+//       serviceCharge: totals.serviceCharge,
+//       chargesVat: issuer.chargesVat !== false,
+//       paymentMethod: payload.method,
+//     });
  
-   const receipt = emitted.ok ? emitted.receipt : createdReceipt;
+   //const receipt = emitted.ok ? emitted.receipt : createdReceipt;
+   const receipt = createdReceipt;
 
     return res.status(201).json({
       receiptId: receipt.receiptId,
@@ -927,7 +936,10 @@ export const retryReceiptEmission = async (
       return res.status(404).json({ message: "Recibo no encontrado" });
     }
 
-    if (receipt.haciendaStatus !== "not_sent" || receipt.integratorDocumentId) {
+   if (
+  !["not_sent", "failed"].includes(receipt.haciendaStatus) ||
+  receipt.integratorDocumentId
+) {
       return res.status(409).json({
         message: "Este recibo no está pendiente de emisión",
         haciendaStatus: receipt.haciendaStatus,
@@ -982,144 +994,56 @@ if (receipt.replacesReceiptId !== null) {
       });
     }
 
-    const [issuer] = await db
-      .select()
-      .from(invoicingConfig)
-      .where(eq(invoicingConfig.businessId, businessId))
-      .limit(1);
+   const requeue = await db.transaction(async (tx) => {
+  // Si el worker lo está procesando ahora mismo, no se toca.
+  const [job] = await tx
+    .insert(receiptEmissionJobs)
+    .values({ receiptId })
+    .onConflictDoUpdate({
+      target: receiptEmissionJobs.receiptId,
+      set: {
+        status: "pending",
+        attempts: 0,
+        availableAt: new Date(),
+        lockedAt: null,
+        lastError: null,
+      },
+      setWhere: ne(receiptEmissionJobs.status, "processing"),
+    })
+    .returning({ jobId: receiptEmissionJobs.jobId });
 
-    if (!issuer || !issuer.certificateUploadedAt) {
-      return res.status(409).json({
-        message: "El emisor no tiene un certificado cargado",
-      });
-    }
+  if (!job) return "busy" as const;
 
-    if (
-      issuer.environment !== receipt.environment ||
-      issuer.updatedAt > receipt.createdAt
-    ) {
-      return res.status(409).json({
-        message:
-          "Los datos o el ambiente del emisor cambiaron desde el cobro. " +
-          "Verificá la emisión antes de reintentar.",
-      });
-    }
+  const [claimed] = await tx
+    .update(receipts)
+    .set({ haciendaStatus: "pending", lastError: null })
+    .where(
+      and(
+        eq(receipts.receiptId, receiptId),
+        eq(receipts.businessId, businessId),
+        inArray(receipts.haciendaStatus, ["not_sent", "failed"]),
+        isNull(receipts.integratorDocumentId),
+      ),
+    )
+    .returning({ receiptId: receipts.receiptId });
 
-    const savedLines = await db
-      .select({
-        detail: receiptDetails,
-        taxCode: receiptTaxes.taxCode,
-        taxRateCode: receiptTaxes.taxRateCode,
-        taxRate: receiptTaxes.taxRate,
-      })
-      .from(receiptDetails)
-      .innerJoin(
-        receiptTaxes,
-        eq(receiptTaxes.detailId, receiptDetails.detailId),
-      )
-      .where(eq(receiptDetails.receiptId, receiptId))
-      .orderBy(asc(receiptDetails.lineNumber));
+  if (!claimed) throw new Error("Estado del recibo cambió durante el reintento");
 
-    if (
-      savedLines.length === 0 ||
-      savedLines.some((line) => line.taxCode !== "01")
-    ) {
-      return res.status(409).json({
-        message: "No se pudieron reconstruir los impuestos del recibo",
-      });
-    }
+  return "queued" as const;
+});
 
-    const savedPayments = await db
-      .select()
-      .from(payments)
-      .where(eq(payments.receiptId, receiptId))
-      .limit(2);
+if (requeue === "busy") {
+  return res.status(409).json({
+    message: "El recibo se está procesando en este momento.",
+  });
+}
 
-    if (savedPayments.length !== 1) {
-      return res.status(409).json({
-        message: "No se pudo identificar el método de pago del recibo",
-      });
-    }
+return res.status(202).json({
+  receiptId,
+  haciendaStatus: "pending",
+  queued: true,
+});
 
-    const paymentMethods = {
-      "01": "cash",
-      "02": "card",
-      "06": "sinpe",
-    } as const;
-
-    const paymentMethod =
-      paymentMethods[
-        savedPayments[0].method as keyof typeof paymentMethods
-      ];
-
-    if (!paymentMethod) {
-      return res.status(409).json({
-        message: "El método de pago guardado no es válido",
-      });
-    }
-
-    const savedCharges = await db
-      .select()
-      .from(otherCharges)
-      .where(eq(otherCharges.receiptId, receiptId));
-
-    if (savedCharges.some((charge) => charge.chargeType !== "06")) {
-      return res.status(409).json({
-        message: "Este recibo tiene cargos que el reintento no puede reconstruir",
-      });
-    }
-
-    const serviceCharge = savedCharges
-      .reduce((sum, charge) => sum + Number(charge.amount), 0)
-      .toFixed(2);
-
-    const lines = savedLines.map(({ detail, taxRateCode, taxRate }) => ({
-      detail: detail.detail,
-      quantity: Number(detail.quantity),
-      unitPrice: detail.unitPrice,
-      discount: detail.discountAmount,
-      subtotal: detail.subtotal,
-      tax: detail.taxAmount,
-      cabysCode: detail.cabysCode,
-      ivaRate: taxRate,
-      ivaRateCode: taxRateCode,
-    }));
-
-    const emission = await emitTiquete({
-      receiptId,
-      orderId: receipt.orderId,
-      issuer,
-      lines,
-      total: receipt.totalVoucher,
-      serviceCharge,
-      // Usa los códigos y tarifas guardados en cada línea.
-      chargesVat: true,
-      paymentMethod,
-  substituteKey,
-    });
-
-    if (!emission.ok) {
-      if (emission.code === "idempotency_in_progress") {
-        return res.status(409).json({
-          message: "Factura en CR todavía está procesando el tiquete.",
-          retryAfterSeconds: emission.retryAfterSeconds ?? 5,
-        });
-      }
-
-      return res.status(502).json({
-        message: "No se pudo reintentar la emisión",
-        providerStatus: emission.status,
-        code: emission.code,
-        detail: emission.message,
-      });
-    }
-
-    return res.status(200).json({
-      receiptId: emission.receipt.receiptId,
-      haciendaStatus: emission.receipt.haciendaStatus,
-      clave: emission.receipt.clave,
-      consecutiveNumber: emission.receipt.consecutiveNumber,
-    });
   } catch (error) {
     console.error("Error reintentando la emisión del recibo:", error);
 
@@ -1443,7 +1367,7 @@ if (replacement.conflict) {
     lines,
     total: replacement.receipt.totalVoucher,
     serviceCharge,
-    chargesVat: true,
+    chargesVat: issuer.chargesVat !== false,
     paymentMethod,
     substituteKey: original.clave,
   });

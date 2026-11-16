@@ -8,6 +8,7 @@ import{
      timestamp,
      varchar,
      boolean,
+     bigserial,
 type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
@@ -250,6 +251,38 @@ export const paymentsRelations = relations(payments, ({ one }) => ({
   }),
 }));
  
+
+
+
+//schema para la emision con cola y webhook
+
+export const receiptEmissionJobs = pgTable("receipt_emission_jobs", {
+  jobId: bigserial("job_id", { mode: "number" }).primaryKey(),
+
+  receiptId: integer("receipt_id")
+    .notNull()
+    .unique()
+    .references(() => receipts.receiptId, { onDelete: "cascade" }),
+
+  status: varchar("status", { length: 20 })
+    .notNull()
+    .default("pending"),
+
+  attempts: integer("attempts")
+    .notNull()
+    .default(0),
+
+  availableAt: timestamp("available_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+
+  lockedAt: timestamp("locked_at", { withTimezone: true }),
+
+  lastError: text("last_error"),
+});
+
+
+
 export type Receipt = typeof receipts.$inferSelect;
 export type NewReceipt = typeof receipts.$inferInsert;
 export type ReceiptDetail = typeof receiptDetails.$inferSelect;

@@ -39,6 +39,26 @@ export async function deleteImageFromStorage(imageUrl: string): Promise<void> {
   );
 }
 
+export async function downloadImageFromStorage(imageUrl: string) {
+  const key = imageUrl.replace(`${process.env.R2_PUBLIC_URL}/`, "");
+
+  const response = await r2Client.send(
+    new GetObjectCommand({
+      Bucket: process.env.R2_BUCKET_NAME!,
+      Key: key,
+    })
+  );
+
+  if (!response.Body) {
+    throw new Error("No se encontró la imagen del producto.");
+  }
+
+  return {
+    body: response.Body,
+    contentType: response.ContentType ?? "image/jpeg",
+  };
+}
+
 
 export async function uploadInvoiceToStorage(
   file: Express.Multer.File
