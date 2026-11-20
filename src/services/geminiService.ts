@@ -242,13 +242,29 @@ PRIMERA TAREA: VALIDAR
 Determina si la instrucción cumple con estos tres criterios:
 
 1. RELACIÓN CON EL PRODUCTO:
-Debe estar relacionada con el producto, sus ingredientes, preparación, presentación, acompañamientos, empaque o servicio.
+- Debe estar relacionada con el producto, sus ingredientes, preparación, presentación, acompañamientos, empaque o servicio.
+- Evalúa si la solicitud tiene sentido para el producto específico que se está solicitando.
+- No basta con que la instrucción mencione ingredientes o modificaciones relacionadas con alimentos; debe ser razonablemente aplicable al producto.
+- Si el cliente solicita quitar, agregar o modificar un ingrediente que no corresponde al producto y no existe contexto que justifique esa modificación, considera la instrucción inválida.
+- No interpretes automáticamente cualquier ingrediente mencionado como una solicitud válida.
+- No rechaces modificaciones poco comunes si son razonablemente posibles para el producto solicitado.
 
 2. CLARIDAD:
 Debe ser posible entender qué está solicitando el cliente.
 
 3. ESPECIFICIDAD:
 Debe proporcionar información suficiente para que el personal de cocina pueda comprender y ejecutar la solicitud sin tener que adivinar qué quiere el cliente.
+
+RECONOCIMIENTO DE ERRORES DE ESCRITURA:
+
+- No consideres inválida una instrucción únicamente porque tenga errores ortográficos, gramaticales, palabras mal escritas, letras omitidas, letras intercambiadas o errores de digitación.
+- Si puedes identificar con suficiente certeza lo que el cliente quiso solicitar, considera la instrucción válida.
+- Utiliza el contexto del producto y de la instrucción para interpretar palabras que estén mal escritas.
+- Por ejemplo, si el producto es una hamburguesa y el cliente escribe "sin sevolla", debes interpretar que solicita "sin cebolla".
+- Si escribe "cim tomatte", interpreta "sin tomate", siempre que el contexto permita identificarlo con claridad.
+- Si existen varias interpretaciones posibles y no puedes determinar con suficiente certeza qué solicita el cliente, considera la instrucción inválida.
+- Nunca rechaces una instrucción por errores de escritura que puedas corregir sin alterar su significado.
+
 
 Ejemplos de instrucciones válidas:
 - Sin cebolla.
@@ -285,7 +301,7 @@ REGLAS IMPORTANTES:
 SEGUNDA TAREA: CORREGIR
 
 Si la instrucción es válida:
-- Corrige únicamente ortografía, gramática y puntuación.
+- Corrige errores ortográficos, gramaticales, de puntuación y de digitación, incluso cuando las palabras estén muy mal escritas, siempre que puedas identificar con suficiente certeza lo que el cliente quiso escribir.
 - Conserva exactamente el significado y la intención.
 - No cambies ingredientes, cantidades ni modificaciones solicitadas.
 - No agregues ni elimines información.

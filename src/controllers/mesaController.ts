@@ -129,12 +129,7 @@ export const getPublicTableNumber = async (req: Request, res: Response) => {
     const [mesa] = await db
       .select({ tableNumber: tables.tableNumber })
       .from(tables)
-      .where(
-        and(
-          eq(tables.id, parsedParams.data.id),
-          eq(tables.active, true),
-        ),
-      )
+      .where(eq(tables.id, parsedParams.data.id))
       .limit(1);
 
     if (!mesa) {
