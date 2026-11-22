@@ -18,26 +18,28 @@ export const authenticate = async (
   res: Response,
   next: NextFunction
 ) => {
+  const token = req.cookies?.token;
+
+  if (!token) {
+    return res.status(401).json({
+      code: "SESSION_EXPIRED",
+      message: "No encontramos tu sesión. Vuelve a iniciar sesión.",
+    });
+  }
+
+  let payload: CustomJWTPayload;
+
   try {
-    // const authHeader = req.headers.authorization;
-const token=req.cookies?.token;
+    payload = await verifyToken(token);
+  } catch {
+    // Token inválido o vencido.
+    return res.status(401).json({
+      code: "SESSION_EXPIRED",
+      message: "No encontramos tu sesión. Vuelve a iniciar sesión.",
+    });
+  }
 
-    // if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    //   return res.status(401).json({
-    //     message: "Token required",
-    //   });
-    // }
-
-    // const token = authHeader.slice(7).trim();
- 
-if (!token) {
-  return res.status(401).json({
-    code: "SESSION_EXPIRED",
-    message: "No encontramos tu sesión. Vuelve a iniciar sesión.",
-  });
-}
-    const payload = await verifyToken(token);
-
+  try {
     const [user] = await db
       .select({
         user_id: users.user_id,
@@ -49,20 +51,19 @@ if (!token) {
       .where(eq(users.user_id, payload.user_id))
       .limit(1);
 
-if (!user) {
-  return res.status(401).json({
-    code: "SESSION_EXPIRED",
-    message: "No encontramos tu sesión. Vuelve a iniciar sesión.",
-  });
-}
+    if (!user) {
+      return res.status(401).json({
+        code: "SESSION_EXPIRED",
+        message: "No encontramos tu sesión. Vuelve a iniciar sesión.",
+      });
+    }
+
     req.user = user;
-    next();
-  } catch {
-  return res.status(401).json({
-    code: "SESSION_EXPIRED",
-    message: "No encontramos tu sesión. Vuelve a iniciar sesión.",
-  });
-}
+    return next();
+  } catch (error) {
+    // Pasa fallos internos al manejador global; no son sesiones vencidas.
+    return next(error);
+  }
 };
 
 export const optionalAuthenticate = async (

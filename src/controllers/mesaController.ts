@@ -116,8 +116,11 @@ if (!businessId) {
   }
 };
 
+
 export const getPublicTableNumber = async (req: Request, res: Response) => {
-  const parsedParams = tableParamsSchema.safeParse({ id: req.params.tableId });
+  const parsedParams = tableParamsSchema.safeParse({
+    id: req.params.tableId,
+  });
 
   if (!parsedParams.success) {
     return res.status(400).json({
@@ -127,24 +130,64 @@ export const getPublicTableNumber = async (req: Request, res: Response) => {
 
   try {
     const [mesa] = await db
-      .select({ tableNumber: tables.tableNumber })
+      .select({
+        tableNumber: tables.tableNumber,
+        active: tables.active,
+      })
       .from(tables)
       .where(eq(tables.id, parsedParams.data.id))
       .limit(1);
 
-    if (!mesa) {
-      return res.status(404).json({ message: "Mesa no encontrada" });
+    if (!mesa || !mesa.active) {
+      return res.status(404).json({
+        code: "TABLE_UNAVAILABLE",
+        message: "La mesa no está disponible. Escanea nuevamente el código QR.",
+      });
     }
 
-    return res.status(200).json({ tableNumber: mesa.tableNumber });
+    return res.status(200).json({
+      tableNumber: mesa.tableNumber,
+      active: mesa.active,
+    });
   } catch (error) {
-    console.error("Error obteniendo el número de mesa público:", error);
+    console.error("Error validando la mesa pública:", error);
 
     return res.status(500).json({
-      message: "No se pudo obtener el número de mesa",
+      message: "No se pudo validar la mesa",
     });
   }
 };
+
+
+// export const getPublicTableNumber = async (req: Request, res: Response) => {
+//   const parsedParams = tableParamsSchema.safeParse({ id: req.params.tableId });
+
+//   if (!parsedParams.success) {
+//     return res.status(400).json({
+//       message: "El identificador de mesa no es válido",
+//     });
+//   }
+
+//   try {
+//     const [mesa] = await db
+//       .select({ tableNumber: tables.tableNumber })
+//       .from(tables)
+//       .where(eq(tables.id, parsedParams.data.id))
+//       .limit(1);
+
+//     if (!mesa) {
+//       return res.status(404).json({ message: "Mesa no encontrada" });
+//     }
+
+//     return res.status(200).json({ tableNumber: mesa.tableNumber });
+//   } catch (error) {
+//     console.error("Error obteniendo el número de mesa público:", error);
+
+//     return res.status(500).json({
+//       message: "No se pudo obtener el número de mesa",
+//     });
+//   }
+// };
 
 //controller para actualizar la cantidad de sillas de una mesa
 export const updateTableChairs = async (req: AuthRequest, res: Response) => {

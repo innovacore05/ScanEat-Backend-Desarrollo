@@ -8,25 +8,30 @@ import * as restaurantThemeSchema from "./schemas/restaurantThemeSchema";
 import env from "../../env";
 import * as sharedCartSchema from "./schemas/sharedCartSchema";
 
-const createPool = () => {
-  return new Pool({
-    connectionString: env.DATABASE_URL,
-    connectionTimeoutMillis: 10000,
-    max: 5,
-    ssl: {
-      rejectUnauthorized: false,
-    },
-  });
-};
+const pool = new Pool({
+  connectionString: env.DATABASE_URL,
+  connectionTimeoutMillis: 10000,
+  max: 5,
+  ssl: {
+    rejectUnauthorized: false,
+  },
+});
 
-export const db = drizzle(createPool(), {
+pool.on("error", (error) => {
+  console.error(
+    "Error en una conexión inactiva de PostgreSQL:",
+    error.message,
+  );
+});
+
+export const db = drizzle(pool, {
   schema: {
     ...userSchema,
     ...mesaSchema,
     ...orderSchema,
     ...reviewSchema,
     ...restaurantThemeSchema,
-    ...sharedCartSchema
+    ...sharedCartSchema,
   },
 });
 
