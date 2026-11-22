@@ -56,13 +56,18 @@ export const orderDetails = pgTable("order_details", {
     precision: 10,
     scale: 2,
   }).notNull().default("0.00"),
-
-
+  preparationState: varchar("preparation_state", { length: 20 })
+  .notNull()
+  .default("pending"),
   subtotal: numeric("subtotal", { precision: 10, scale: 2 }).notNull(),
   selectedOptions: json("selected_options")
     .$type<Record<string, string>>()
     .notNull()
     .default({}),
+  specialInstructions: json("special_instructions")
+    .$type<{ unit: number; instruction: string }[]>()
+    .notNull()
+    .default([]),
   orderId: integer("order_id")
     .notNull()
     .references(() => orders.orderId, { onDelete: "cascade" }),
@@ -94,6 +99,12 @@ const orderItemSchema = z.object({
   productId: z.coerce.number().int().positive("El producto no es válido"),
   quantity: z.coerce.number().int().positive("La cantidad debe ser mayor que cero"),
   selectedOptions: z.record(z.string(), z.string()).optional().default({}),
+  specialInstructions: z.array(
+    z.object({
+      unit: z.number().int().positive(),
+      instruction: z.string().trim().min(1).max(500),
+    }),
+  ).optional().default([]),
 });
 
 export const orderStatuses = {
@@ -120,17 +131,17 @@ export const createOrderSchema = z
     clientId: z.uuid().optional(),
     observation: z.string().trim().max(1000, "La observación es demasiado larga").optional(),
     items: z.array(orderItemSchema).min(1, "El pedido debe incluir al menos un producto"),
-  })
-  .superRefine((order, context) => {
-    const productIds = order.items.map((item) => item.productId);
-    if (new Set(productIds).size !== productIds.length) {
-      context.addIssue({
-        code: "custom",
-        path: ["items"],
-        message: "No se puede repetir un producto; ajusta su cantidad",
-      });
-    }
   });
+  // .superRefine((order, context) => {
+  //   const productIds = order.items.map((item) => item.productId);
+  //   if (new Set(productIds).size !== productIds.length) {
+  //     context.addIssue({
+  //       code: "custom",
+  //       path: ["items"],
+  //       message: "No se puede repetir un producto; ajusta su cantidad",
+  //     });
+  //   }
+  // });
 
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
 export type OrderStatus = z.infer<typeof orderStatusSchema>;

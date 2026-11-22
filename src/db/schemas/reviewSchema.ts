@@ -43,7 +43,7 @@ export const reviews = pgTable(
             .references(() => tables.id, { onDelete: 
                 "restrict" }),
 
-        rating: integer("rating").notNull(),
+        rating: integer("rating"),
 
         name: text("name"),
 
@@ -84,7 +84,7 @@ export const createReviewSchema = z.object({
     name: z
         .string()
         .trim()
-        .max(1000)
+        .max(80)
         .optional()
         .nullable(),
     comment: z

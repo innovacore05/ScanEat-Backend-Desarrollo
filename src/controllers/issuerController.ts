@@ -4,6 +4,7 @@ import { db } from "../db/connection";
 import { invoicingConfig, issuerSchema } from "../db/schemas/billingSchema";
 import { AuthRequest } from "../middleware/authenticate";
 import { fetchRegime } from "../services/factura.service";
+import { z } from "zod";
 
 // obtener los datos del emisor del negocio
 export const getIssuer = async (req: AuthRequest, res: Response) => {
@@ -111,7 +112,11 @@ export const saveIssuer = async (req: AuthRequest, res: Response) => {
   }
 };
 
-
+const certificateCredentialsSchema = z.object({
+  p12Password: z.string().min(1).max(256),
+  haciendaUsername: z.string().trim().min(1).max(255),
+  haciendaPassword: z.string().min(1).max(1024),
+});
 
 // reenvio de el .p12 y las credenciales a Factura en CR. No se guarda nada de esto
 export const uploadCertificate = async (req: AuthRequest, res: Response) => {
@@ -123,13 +128,17 @@ export const uploadCertificate = async (req: AuthRequest, res: Response) => {
         .json({ message: "El usuario no tiene un negocio asociado" });
     }
 
-    const { p12Password, haciendaUsername, haciendaPassword } = req.body;
+    const credentials = certificateCredentialsSchema.safeParse(req.body);
 
-    if (!req.file || !p12Password || !haciendaUsername || !haciendaPassword) {
-      return res.status(400).json({
-        message: "Faltan el .p12, su PIN o las credenciales de Hacienda",
-      });
-    }
+if (!req.file || !credentials.success) {
+  return res.status(400).json({
+    message: "Faltan el .p12, su PIN o las credenciales de Hacienda",
+  });
+}
+
+const { p12Password, haciendaUsername, haciendaPassword } =
+  credentials.data;
+  
 
     if (!req.file.originalname.toLowerCase().endsWith(".p12")) {
       return res.status(400).json({ message: "El archivo debe ser un .p12" });

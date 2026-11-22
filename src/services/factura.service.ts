@@ -5,6 +5,8 @@ import {
   TiquetePayloadBuilder,
   type PaymentMethod,
 } from "./payloadBulder.service";
+import { emitToStaff } from "../socket";
+
 
 const BASE_URL = "https://api.facturaencr.com/v2/efactura";
 const TIMEOUT_MS = 20_000;
@@ -14,12 +16,24 @@ export const FINAL_STATUSES = new Set(["accepted", "rejected"]);
 
 type IssuerRow = typeof invoicingConfig.$inferSelect;
 
+
+export type EmitTiqueteResult =
+  | { ok: true; receipt: typeof receipts.$inferSelect }
+  | {
+      ok: false;
+      status: number | null;
+      code?: string;
+      message: string;
+      retryAfterSeconds?: number;
+    };
+
 export class FacturaEnCrError extends Error {
   constructor(
-    message: string,
+     message: string,
     public status: number,
     public code?: string,
     public details?: unknown,
+    public retryAfterSeconds?: number,
   ) {
     super(message);
   }
@@ -55,14 +69,33 @@ const request = async <T>(
 
   const data = await response.json().catch(() => null);
 
-  if (!response.ok) {
-    throw new FacturaEnCrError(
-      data?.message ?? `Factura en CR respondió ${response.status}`,
-      response.status,
-      data?.error,
-      data?.details,
-    );
-  }
+ if (!response.ok) {
+  const retryAfterHeader = response.headers.get("Retry-After");
+  const retryAfterDateMs = retryAfterHeader
+    ? Date.parse(retryAfterHeader)
+    : Number.NaN;
+
+  const headerRetryAfterSeconds = retryAfterHeader
+    ? /^\d+$/.test(retryAfterHeader.trim())
+      ? Number(retryAfterHeader.trim())
+      : Number.isFinite(retryAfterDateMs)
+        ? Math.max(1, Math.ceil((retryAfterDateMs - Date.now()) / 1000))
+        : undefined
+    : undefined;
+
+  const retryAfterSeconds =
+    typeof data?.retryAfterSeconds === "number"
+      ? data.retryAfterSeconds
+      : headerRetryAfterSeconds;
+
+  throw new FacturaEnCrError(
+    data?.message ?? `Factura en CR respondió ${response.status}`,
+    response.status,
+    data?.error,
+    data?.details,
+    retryAfterSeconds,
+  );
+}
 
   return data as T;
 };
@@ -110,22 +143,28 @@ type EmissionResponse = {
 };
 
 // se llama DESPUÉS del commit del cobro; un fallo aquí nunca deshace el pago
-export const emitTiquete = async (params: {
-  receiptId: number;
-  orderId: number;
-  issuer: IssuerRow;
-  lines: EmissionLine[];
-  total: string;          
-  serviceCharge: string;  
-  chargesVat: boolean;    
-  paymentMethod: PaymentMethod;
-}) => {
+export const emitTiquete = async (
+  params: {
+    receiptId: number;
+    orderId: number;
+    issuer: IssuerRow;
+    lines: EmissionLine[];
+    total: string;
+    serviceCharge: string;
+    chargesVat: boolean;
+    paymentMethod: PaymentMethod;
+    substituteKey?: string;
+  },
+): Promise<EmitTiqueteResult> => {
+
   try {
     // si el builder lanza error, cae al catch: no se envía nada
     const payload = {
       ...TiquetePayloadBuilder.build({
         emisorLegalId: params.issuer.legalId,
+        sustituye: params.substituteKey,
         paymentMethod: params.paymentMethod,
+        
         total: params.total,
         serviceCharge: params.serviceCharge,
         chargesVat: params.chargesVat,
@@ -156,7 +195,7 @@ export const emitTiquete = async (params: {
       .where(eq(receipts.receiptId, params.receiptId))
       .returning();
 
-    return updated;
+    return { ok: true, receipt: updated };
   } catch (error) {
     const message =
       error instanceof FacturaEnCrError
@@ -174,8 +213,17 @@ export const emitTiquete = async (params: {
         lastError: message.slice(0, 1000),
       })
       .where(eq(receipts.receiptId, params.receiptId));
-
-    return null; // el recibo queda con haciendaStatus = "not_sent"
+//
+   return {
+  ok: false,
+  status: error instanceof FacturaEnCrError ? error.status : null,
+  code: error instanceof FacturaEnCrError ? error.code : undefined,
+  message,
+  ...(error instanceof FacturaEnCrError &&
+  error.retryAfterSeconds !== undefined
+    ? { retryAfterSeconds: error.retryAfterSeconds }
+    : {}),
+};
   }
 };
 
@@ -186,6 +234,7 @@ type DocumentResponse = { status: string; haciendaMessage?: string | null };
 export const refreshReceiptStatus = async (
   receiptId: number,
   businessId: number,
+  options?: { force?: boolean },
 ) => {
   const [receipt] = await db
     .select()
@@ -196,9 +245,12 @@ export const refreshReceiptStatus = async (
     .limit(1);
 
   if (!receipt) return null;
-  if (!receipt.integratorDocumentId || FINAL_STATUSES.has(receipt.haciendaStatus)) {
-    return receipt;
-  }
+  if (
+  !receipt.integratorDocumentId ||
+  (FINAL_STATUSES.has(receipt.haciendaStatus) && !options?.force)
+) {
+  return receipt;
+}
 
   const doc = await request<DocumentResponse>(
     `/documents/${receipt.integratorDocumentId}`,
@@ -214,5 +266,50 @@ export const refreshReceiptStatus = async (
     .where(eq(receipts.receiptId, receiptId))
     .returning();
 
+
+    if (updated && updated.haciendaStatus !== receipt.haciendaStatus) {
+  emitToStaff(updated.businessId, "receipt:status-updated", {
+    
+    receiptId: updated.receiptId,
+    status: updated.haciendaStatus,
+    haciendaMessage: updated.haciendaMessage,
+  });
+}
+
   return updated;
+};
+
+//---solicitud de descarga 
+export const downloadFacturaEnCrFile = async (
+  path: string,
+  legalId: string,
+) => {
+  const apiKey = process.env.FACTURAENCR_API_KEY;
+  const apiSecret = process.env.FACTURAENCR_API_SECRET;
+
+  if (!apiKey || !apiSecret) {
+    throw new Error("Faltan las credenciales de Factura en CR");
+  }
+
+  const response = await fetch(`${BASE_URL}${path}`, {
+    method: "GET",
+    headers: {
+      "X-API-Key": apiKey,
+      "X-API-Secret": apiSecret,
+      "X-Emisor": legalId,
+      Accept: "application/xml, application/zip",
+    },
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Factura en CR respondió ${response.status}`);
+  }
+
+  return {
+    contentType:
+      response.headers.get("content-type") ?? "application/xml",
+    body: Buffer.from(await response.arrayBuffer()),
+  };
 };

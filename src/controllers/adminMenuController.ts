@@ -14,6 +14,45 @@ import {
 import { deleteImageFromStorage, uploadImageToStorage } from "../services/storage.service";
 import { validateImage } from "../utils/validateImage";
 import { isFiscalType,resolveFiscalOption } from "../services/cabys.service";
+import { getChargesVat } from "../services/regime.service";
+import { downloadImageFromStorage } from "../services/storage.service";
+
+//esto de acae s para que en el  menu se sume al precio el total con iva si acplica
+const roundMenuPrice = (value: number): number =>
+  Math.round((value + Number.EPSILON) * 100) / 100;
+
+const getMenuDisplayPrices = (
+  price: number,
+  discount: number,
+  ivaRate: number,
+  chargesVat: boolean | null,
+) => {
+  // Igual que el cálculo del pedido: solo excluimos el IVA
+  // cuando el régimen está confirmado como uno que no lo traslada.
+  const effectiveRate = chargesVat === false ? 0 : ivaRate;
+
+  const originalTax = roundMenuPrice(price * (effectiveRate / 100));
+  const discountedBase = roundMenuPrice(
+    price - roundMenuPrice(price * (discount / 100)),
+  );
+  const discountedTax = roundMenuPrice(
+    discountedBase * (effectiveRate / 100),
+  );
+
+  return {
+    priceWithTax: roundMenuPrice(price + originalTax),
+    discountedPriceWithTax: roundMenuPrice(
+      discountedBase + discountedTax,
+    ),
+    displayIvaRate: effectiveRate,
+  };
+};
+
+
+
+
+
+
 
 
 export const getProducts = async (
@@ -58,16 +97,19 @@ export const getProducts = async (
     const offsetNum = offset ? Number(offset) : 0;
 
     const result = await db
-      .select({
-        productId: products.productId,
-        productName: products.productName,
-        description: products.description,
-        price: products.price,
-        image: products.image,
-        rating: products.rating,
-        categoryId: products.categoryId,
-        discount: products.discount,
-      })
+  .select({
+    productId: products.productId,
+    productName: products.productName,
+    description: products.description,
+    price: products.price,
+    image: products.image,
+    rating: products.rating,
+    categoryId: products.categoryId,
+    discount: products.discount,
+    isAvailable: products.isAvailable,
+    ivaRate: products.ivaRate,
+    ivaRateCode: products.ivaRateCode,
+  })
       .from(products)
       .leftJoin(
         categories,
@@ -93,12 +135,29 @@ export const getProducts = async (
       .limit(limitNum)
       .offset(offsetNum);
 
-    const formatted = result.map((p) => ({
-      ...p,
-      price: Number(p.price),
-      rating: Number(p.rating),
-    }));
 
+const chargesVat = await getChargesVat(businessId);
+
+const formatted = result.map((product) => {
+  const price = Number(product.price);
+  const discount = Number(product.discount ?? 0);
+  const ivaRate = Number(product.ivaRate ?? 0);
+
+  const displayPrices = getMenuDisplayPrices(
+    price,
+    discount,
+    ivaRate,
+    chargesVat,
+  );
+
+  return {
+    ...product,
+    // Se conserva como precio base para el pedido
+    price, 
+    ...displayPrices,
+    rating: Number(product.rating),
+  };
+});
     res.status(200).json({
       products: formatted,
       hasMore: formatted.length === limitNum,
@@ -109,6 +168,45 @@ export const getProducts = async (
     res.status(500).json({
       message: "Error al obtener los productos",
     });
+  }
+};
+
+export const updateProductAvailability = async (
+  req: AuthRequest,
+  res: Response,
+) => {
+  try {
+    const productId = Number(req.params.id);
+    const businessId = req.user?.business_id;
+    const isAvailable = req.body?.isAvailable;
+
+    if (!businessId) {
+      return res.status(400).json({ message: "El usuario no tiene un negocio asociado" });
+    }
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({ message: "ID de producto inválido" });
+    }
+    if (typeof isAvailable !== "boolean") {
+      return res.status(400).json({ message: "La disponibilidad debe ser un valor booleano" });
+    }
+
+    const [product] = await db
+      .update(products)
+      .set({ isAvailable })
+      .where(and(eq(products.productId, productId), eq(products.businessId, businessId)))
+      .returning();
+
+    if (!product) {
+      return res.status(404).json({ message: "Producto no encontrado" });
+    }
+
+    return res.status(200).json({
+      message: isAvailable ? "Platillo marcado como disponible" : "Platillo marcado como agotado",
+      product: { ...product, price: Number(product.price), discount: Number(product.discount ?? 0) },
+    });
+  } catch (error) {
+    console.error("Error updating product availability:", error);
+    return res.status(500).json({ message: "Error al actualizar la disponibilidad del platillo" });
   }
 };
 
@@ -129,11 +227,20 @@ export const getProductsById = async (req: AuthRequest, res: Response) => {
     }
 
 
-    const product = {
-      ...result[0],
-      price: Number(result[0].price),
-      rating: Number(result[0].rating),
-    };
+  const row = result[0];
+const chargesVat = await getChargesVat(row.businessId);
+
+const price = Number(row.price);
+const discount = Number(row.discount ?? 0);
+const ivaRate = Number(row.ivaRate ?? 0);
+
+const product = {
+  ...row,
+  price,
+  discount,
+  rating: Number(row.rating),
+  ...getMenuDisplayPrices(price, discount, ivaRate, chargesVat),
+};
 
     let optionGroups: Array<{
       id: number;
@@ -166,6 +273,59 @@ export const getProductsById = async (req: AuthRequest, res: Response) => {
   } catch (error) {
     console.error("Error fetching product:", error);
     res.status(500).json({ message: "Error al obtener el producto" });
+  }
+};
+
+// Obtener imagen de un producto desde R2
+export const getProductImage = async (req: AuthRequest, res: Response) => {
+  try {
+    const productId = Number(req.params.id);
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
+
+    if (!Number.isInteger(productId) || productId <= 0) {
+      return res.status(400).json({
+        message: "ID de producto inválido",
+      });
+    }
+
+    const [product] = await db
+      .select()
+      .from(products)
+      .where(
+        and(
+          eq(products.productId, productId),
+          eq(products.businessId, businessId)
+        )
+      )
+      .limit(1);
+
+    if (!product || !product.image) {
+      return res.status(404).json({
+        message: "Imagen del producto no encontrada",
+      });
+    }
+
+    const image = await downloadImageFromStorage(product.image);
+
+    res.setHeader("Content-Type", image.contentType);
+    res.setHeader("Cache-Control", "private, max-age=3600");
+
+    const buffer = await image.body.transformToByteArray();
+
+    return res.status(200).send(Buffer.from(buffer));
+
+  } catch (error) {
+    console.error("Error al recuperar imagen del producto:", error);
+
+    return res.status(500).json({
+      message: "Error al recuperar la imagen",
+    });
   }
 };
 
@@ -1206,4 +1366,3 @@ export const deleteCustomProduct = async (req: AuthRequest, res: Response) => {
     return res.status(500).json({ message: "Error al eliminar el platillo personalizado" });
   }
 };
-

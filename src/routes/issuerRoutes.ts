@@ -13,7 +13,13 @@ const router = Router();
 // el .p12 se queda en memoria, nunca se escribe en disco (máximo 64 KB)
 const uploadP12 = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 64 * 1024 },
+  limits: {
+    fileSize: 64 * 1024,
+    files: 1,
+    fields: 3,
+    parts: 4,
+    fieldSize: 1024,
+  },
 });
 
 router.get("/", authenticate, requireRole(1), getIssuer);

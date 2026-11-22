@@ -69,8 +69,8 @@ export const businesses = pgTable("businesses", {
 
   number: varchar("number", { length: 30 }).notNull(),
 
-  code: varchar("code", { length: 20 }).notNull().unique(),
-
+  code: varchar("code", { length: 64 }).notNull().unique(),
+  codeEncrypted: varchar("code_encrypted", { length: 255 }),
   admin_id: integer("admin_id")
     .unique()
     .references(() => users.user_id),

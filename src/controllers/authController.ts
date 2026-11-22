@@ -10,10 +10,14 @@ import { generateVerificationCode } from "../utils/generateCode";
 import { sendVerificationEmail } from '../services/email.service';
 import { AuthRequest } from "../middleware/authenticate";
 import { isProd } from "../../env";
+import {
+  hashBusinessCode,
+  decryptBusinessCode,
+} from "../utils/businessCode";
 
 //nuevo
-const cookieSameSite=():"none"| "lax"=>
-(isProd()? "none":"lax");
+const cookieSameSite = (): "none" | "lax" =>
+  (isProd() ? "none" : "lax");
 
 
 import { validatePasswordStrength } from "../utils/passwordValidation";
@@ -130,20 +134,24 @@ export const register = async (req: Request, res: Response) => {
     let businessId: number | null = null;
 
     // Validar que cocinero y mesero tengan código de negocio
-    if ((normalizedRoleId === 2 || normalizedRoleId === 3||normalizedRoleId === 4) && !normalizedBusinessCode) {
+    if ((normalizedRoleId === 2 || normalizedRoleId === 3 || normalizedRoleId === 4) && !normalizedBusinessCode) {
       return res.status(400).json({
         message: "El código del negocio es requerido",
       });
     }
 
-    if (normalizedRoleId === 2 || normalizedRoleId === 3||normalizedRoleId === 4) {
+    if (normalizedRoleId === 2 || normalizedRoleId === 3 || normalizedRoleId === 4) {
+
+      const businessCodeHash = hashBusinessCode(normalizedBusinessCode);
+
       const [business] = await db
         .select({
           business_id: businesses.business_id,
         })
         .from(businesses)
-        .where(eq(businesses.code, normalizedBusinessCode))
+        .where(eq(businesses.code, businessCodeHash))
         .limit(1);
+
 
       if (!business) {
         return res.status(400).json({
@@ -355,12 +363,16 @@ export const verifyEmail = async (req: Request, res: Response) => {
     let businessId: number | null = null;
 
     if (pendingRegistration.business_code) {
+      const businessCodeHash = hashBusinessCode(
+        pendingRegistration.business_code
+      );
+
       const [business] = await db
         .select({
           business_id: businesses.business_id,
         })
         .from(businesses)
-        .where(eq(businesses.code, pendingRegistration.business_code))
+        .where(eq(businesses.code, businessCodeHash))
         .limit(1);
 
       if (!business) {
@@ -422,13 +434,13 @@ export const verifyEmail = async (req: Request, res: Response) => {
       role_id: user.role_id,
     });
 
-res.cookie("token",token,{
-  httpOnly:true,
-  secure:isProd(),
-  sameSite:cookieSameSite(),
-  maxAge:10*60*60*1000,
-  path:"/",
-});
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: isProd(),
+      sameSite: cookieSameSite(),
+      maxAge: 10 * 60 * 60 * 1000,
+      path: "/",
+    });
 
     // Crear registro de verificación ya verificado
     await db.insert(emailVerifications).values({
@@ -451,7 +463,7 @@ res.cookie("token",token,{
     return res.status(201).json({
       message:
         "Correo verificado correctamente. Tu cuenta ha sido creada.",
-      
+
       user: {
         userId: user.user_id,
         email: user.email,
@@ -672,13 +684,13 @@ export const verifyLoginCode = async (req: Request, res: Response) => {
       .delete(loginVerifications)
       .where(eq(loginVerifications.user_id, user.user_id));
 
-res.cookie("token",token,{
-httpOnly:true,
-secure:isProd(),
-sameSite:cookieSameSite(),
-maxAge: 10 * 60 * 60 * 1000,
-path:"/",
-});
+    res.cookie("token", token, {
+      httpOnly: true,
+      secure: isProd(),
+      sameSite: cookieSameSite(),
+      maxAge: 10 * 60 * 60 * 1000,
+      path: "/",
+    });
 
     return res.status(200).json({
       message: "Inicio de sesión exitoso",
@@ -1065,7 +1077,7 @@ export const getProfile = async (
           name: businesses.name,
           email: businesses.email,
           number: businesses.number,
-          code: businesses.code,
+          codeEncrypted: businesses.codeEncrypted,
         },
       })
       .from(users)
@@ -1085,7 +1097,22 @@ export const getProfile = async (
       });
     }
 
-    return res.status(200).json(result);
+    const profile = {
+      ...result,
+      business: result.business
+        ? {
+          businessId: result.business.businessId,
+          name: result.business.name,
+          email: result.business.email,
+          number: result.business.number,
+          code: result.business.codeEncrypted
+            ? decryptBusinessCode(result.business.codeEncrypted)
+            : "",
+        }
+        : null,
+    };
+
+    return res.status(200).json(profile);
 
   } catch (error) {
     console.error("Get profile error:", error);
@@ -1323,21 +1350,21 @@ export const changePassword = async (req: AuthRequest, res: Response) => {
 
 
 //controlador para cerrar sesion e invalidar la cookie en el backend 
-export const logout=async(_req:Request,res:Response)=>{
-  try{
-    res.clearCookie("token",{
-      httpOnly:true,
-      secure:isProd(),
-      sameSite:cookieSameSite(),
-      path:"/",
+export const logout = async (_req: Request, res: Response) => {
+  try {
+    res.clearCookie("token", {
+      httpOnly: true,
+      secure: isProd(),
+      sameSite: cookieSameSite(),
+      path: "/",
     });
-  
-  return res.status(200).json({
-    message:"Sesión cerrada correctamente",
-  });
-}catch(error){
-  console.error("Logout error:", error);
-  return res.status(500).json({message:"No se pudo cerrar la sesión" });
+
+    return res.status(200).json({
+      message: "Sesión cerrada correctamente",
+    });
+  } catch (error) {
+    console.error("Logout error:", error);
+    return res.status(500).json({ message: "No se pudo cerrar la sesión" });
   }
 };
 

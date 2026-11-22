@@ -15,7 +15,7 @@ export const getFiscalOptions = async (req: Request, res: Response) => {
       return res.status(400).json({ message: "El tipo fiscal no es válido" });
     }
 
-    // dishes y packaged no cargan lista: uno usa código por defecto, el otro busca
+    // dishes y packaged no cargan lista: uno usa codigo por defecto, el otro busca
     if (fiscalType === "dishes" || SEARCH_FAMILIES[fiscalType] !== undefined) {
       return res.status(200).json([]);
     }
@@ -33,7 +33,7 @@ export const getFiscalOptions = async (req: Request, res: Response) => {
   }
 };
 
-// GET /cabys/search?q=chicle&type=packaged
+// GET /cabys/search?q=producto&type=packaged
 export const searchCabys = async (req: Request, res: Response) => {
   try {
     const q = String(req.query.q ?? "").trim();

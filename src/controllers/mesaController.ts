@@ -65,7 +65,7 @@ if (!businessId) {
     const mesaList = await db
       .select()
       .from(tables)
-      .where(and(eq(tables.businessId, businessId), eq(tables.active, true)))
+      .where(eq(tables.businessId, businessId))
       .orderBy(tables.tableNumber);
 
     return res.status(200).json(mesaList);
@@ -116,8 +116,11 @@ if (!businessId) {
   }
 };
 
+
 export const getPublicTableNumber = async (req: Request, res: Response) => {
-  const parsedParams = tableParamsSchema.safeParse({ id: req.params.tableId });
+  const parsedParams = tableParamsSchema.safeParse({
+    id: req.params.tableId,
+  });
 
   if (!parsedParams.success) {
     return res.status(400).json({
@@ -127,29 +130,64 @@ export const getPublicTableNumber = async (req: Request, res: Response) => {
 
   try {
     const [mesa] = await db
-      .select({ tableNumber: tables.tableNumber })
+      .select({
+        tableNumber: tables.tableNumber,
+        active: tables.active,
+      })
       .from(tables)
-      .where(
-        and(
-          eq(tables.id, parsedParams.data.id),
-          eq(tables.active, true),
-        ),
-      )
+      .where(eq(tables.id, parsedParams.data.id))
       .limit(1);
 
-    if (!mesa) {
-      return res.status(404).json({ message: "Mesa no encontrada" });
+    if (!mesa || !mesa.active) {
+      return res.status(404).json({
+        code: "TABLE_UNAVAILABLE",
+        message: "La mesa no está disponible. Escanea nuevamente el código QR.",
+      });
     }
 
-    return res.status(200).json({ tableNumber: mesa.tableNumber });
+    return res.status(200).json({
+      tableNumber: mesa.tableNumber,
+      active: mesa.active,
+    });
   } catch (error) {
-    console.error("Error obteniendo el número de mesa público:", error);
+    console.error("Error validando la mesa pública:", error);
 
     return res.status(500).json({
-      message: "No se pudo obtener el número de mesa",
+      message: "No se pudo validar la mesa",
     });
   }
 };
+
+
+// export const getPublicTableNumber = async (req: Request, res: Response) => {
+//   const parsedParams = tableParamsSchema.safeParse({ id: req.params.tableId });
+
+//   if (!parsedParams.success) {
+//     return res.status(400).json({
+//       message: "El identificador de mesa no es válido",
+//     });
+//   }
+
+//   try {
+//     const [mesa] = await db
+//       .select({ tableNumber: tables.tableNumber })
+//       .from(tables)
+//       .where(eq(tables.id, parsedParams.data.id))
+//       .limit(1);
+
+//     if (!mesa) {
+//       return res.status(404).json({ message: "Mesa no encontrada" });
+//     }
+
+//     return res.status(200).json({ tableNumber: mesa.tableNumber });
+//   } catch (error) {
+//     console.error("Error obteniendo el número de mesa público:", error);
+
+//     return res.status(500).json({
+//       message: "No se pudo obtener el número de mesa",
+//     });
+//   }
+// };
 
 //controller para actualizar la cantidad de sillas de una mesa
 export const updateTableChairs = async (req: AuthRequest, res: Response) => {
@@ -191,7 +229,7 @@ if (!businessId) {
   }
 };
 
-//controller para eliminar una mesa
+//controller para desactivar una mesa
 export const deleteTable = async (req: AuthRequest, res: Response) => {
   try {
     const { id } = tableParamsSchema.parse(req.params);
@@ -203,7 +241,7 @@ export const deleteTable = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    // la mesa no se puede eliminar si tiene una orden sin cobrar
+    // la mesa no se puede desactivar si tiene una orden sin cobrar
     const [activeOrder] = await db
       .select({ orderId: orders.orderId })
       .from(orders)
@@ -222,7 +260,7 @@ export const deleteTable = async (req: AuthRequest, res: Response) => {
 
     if (activeOrder) {
       return res.status(409).json({
-        message: "La mesa tiene una orden activa y no se puede eliminar",
+        message: "La mesa tiene una orden activa y no se puede desactivar",
       });
     }
 
@@ -246,13 +284,55 @@ export const deleteTable = async (req: AuthRequest, res: Response) => {
     }
 
     return res.status(200).json({
-      message: "Mesa eliminada correctamente",
+      message: "Mesa desactivada correctamente",
     });
   } catch (error) {
-    console.error("Error eliminando mesa:", error);
+    console.error("Error desactivando la mesa:", error);
 
     return res.status(500).json({
-      message: "No se pudo eliminar la mesa",
+      message: "No se pudo desactivar la mesa",
+    });
+  }
+};
+
+//Activar una mesa
+export const activateTable = async (req: AuthRequest, res: Response) => {
+  try {
+    const { id } = tableParamsSchema.parse(req.params);
+    const businessId = req.user?.business_id;
+
+    if (!businessId) {
+      return res.status(400).json({
+        message: "El usuario no tiene un negocio asociado",
+      });
+    }
+
+    const [mesa] = await db
+      .update(tables)
+      .set({ active: true })
+      .where(
+        and(
+          eq(tables.id, id),
+          eq(tables.businessId, businessId),
+          eq(tables.active, false),
+        ),
+      )
+      .returning();
+
+    if (!mesa) {
+      return res.status(404).json({
+        message: "Mesa no encontrada o ya está activa",
+      });
+    }
+
+    return res.status(200).json({
+      message: "Mesa activada correctamente",
+    });
+  } catch (error) {
+    console.error("Error activando mesa:", error);
+
+    return res.status(500).json({
+      message: "No se pudo activar la mesa",
     });
   }
 };

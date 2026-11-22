@@ -16,7 +16,18 @@ import publicThemeRoutes from "./src/routes/publicThemeRoutes";
 import billingRoutes from "./src/routes/billingRoutes";
 import aiRoutes from "./src/routes/aiRoutes";
 import multer from "multer";
+<<<<<<< HEAD
 import issuerRoutes from "./src/routes/issuerRoutes";
+=======
+import sharedCartRoutes from "./src/routes/sharedCartRoutes";
+import expensesRoutes from "./src/routes/expensesRoutes";
+import issuerRoutes from "./src/routes/issuerRoutes";
+import receiptsRoutes from "./src/routes/receiptRoutes";
+
+import { createServer } from "http";
+import { initSocket } from "./src/socket";
+import { startReceiptEmissionWorker } from './src/services/receiptEmissionWorker.service';
+>>>>>>> f908223d2399513a1369c234ad41f05484fc79bd
 
 app.use('/api/auth', authRoutes);
 app.use("/api/menu",menuRoutes);
@@ -29,8 +40,15 @@ app.use("/api/businesses", themeRoutes);
 app.use("/api/public", publicThemeRoutes);
 app.use("/api/billing", billingRoutes);
 app.use("/api/ai", aiRoutes);
+<<<<<<< HEAD
 app.use("/api/issuer", issuerRoutes);
 
+=======
+app.use("/api/shared-carts", sharedCartRoutes);
+app.use("/api/expenses", expensesRoutes);
+app.use("/api/issuer", issuerRoutes);
+app.use("/api/receipts", receiptsRoutes);
+>>>>>>> f908223d2399513a1369c234ad41f05484fc79bd
 
 app.use('/api', (req, res) =>{
     res.status(404).json({ message: 'Endpoint not found' });
@@ -74,6 +92,15 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 
 
 
-app.listen(env.PORT, () => {
-    console.log(`Server running on port ${env.PORT}`);
+// app.listen(env.PORT, () => {
+//     console.log(`Server running on port ${env.PORT}`);
+// });
+const httpServer = createServer(app);
+
+initSocket(httpServer);
+startReceiptEmissionWorker(); 
+
+
+httpServer.listen(env.PORT, () => {
+  console.log(`Server running on port ${env.PORT}`);
 });

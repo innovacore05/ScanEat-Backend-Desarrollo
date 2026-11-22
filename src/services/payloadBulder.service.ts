@@ -35,11 +35,13 @@ export type TiquetePayloadInput = {
   total: string | number;
   lines: TiqueteLineInput[];
   receptor?: TiqueteReceiverInput;
+   sustituye?: string;
 };
 
 export type TiquetePayload = {
   emisorLegalId: string;
   codigoActividad?: string;
+  sustituye?: string;
   condicionVenta: "01";
   currency: "CRC";
   medioPago: Array<{
@@ -59,7 +61,7 @@ export type TiquetePayload = {
       codigoDescuentoOtro?: string;
       naturalezaDescuento?: string;
     }>;
-     impuesto?: Array<{ codigo: "01"; codigoTarifa: string; tarifa: number }>;
+     impuesto: Array<{ codigo: "01"; codigoTarifa: string; tarifa: number }>;
   }>;
     otrosCargos?: Array<{
     tipoDocumento: "06"; 
@@ -109,6 +111,12 @@ export class TiquetePayloadBuilder {
   static build(input: TiquetePayloadInput): TiquetePayload {
     const emisorLegalId = input.emisorLegalId.trim();
 
+    //esto es para manejar tiquetes rechazados 
+const substituteKey = input.sustituye?.trim();
+
+if (input.sustituye !== undefined && !/^\d{50}$/.test(substituteKey ?? "")) {
+  throw new Error("La clave del tiquete rechazado no es válida.");
+}
 
  const vat = input.chargesVat !== false;
     const serviceCharge = toNonNegativeNumber(
@@ -164,10 +172,14 @@ export class TiquetePayloadBuilder {
         line.tax,
         `Impuesto de la línea ${lineNumber}`,
       );
-      const rate = toNonNegativeNumber(
-        line.ivaRate,
-        `Tarifa IVA de la línea ${lineNumber}`,
-      );
+    const tariffCode = vat ? line.ivaRateCode : "10";
+
+const rate = vat
+  ? toNonNegativeNumber(
+      line.ivaRate,
+      `Tarifa IVA de la línea ${lineNumber}`,
+    )
+  : 0;
 
       if (!Number.isInteger(quantity) || quantity <= 0) {
         throw new Error(`La cantidad de la línea ${lineNumber} no es válida.`);
@@ -177,7 +189,7 @@ export class TiquetePayloadBuilder {
         throw new Error(`El CABYS de la línea ${lineNumber} no es válido.`);
       }
 
-      const expectedRate = IVA_RATE_BY_CODE[line.ivaRateCode];
+      const expectedRate = IVA_RATE_BY_CODE[tariffCode];
 
       if (expectedRate === undefined || !sameCurrency(rate, expectedRate)) {
         throw new Error(
@@ -246,24 +258,20 @@ export class TiquetePayloadBuilder {
         calculatedTotal += expectedSubtotal + expectedTax;
       netTotal += expectedSubtotal;
 
-      return {
+       return {
         cantidad: quantity,
         unidadMedida: "Unid" as const,
         codigoCabys: line.cabysCode,
         detalle: line.detail.trim(),
         precioUnitario: unitPrice,
         ...(descuento ? { descuento } : {}),
-         ...(vat
-          ? {
-              impuesto: [
-                {
-                  codigo: "01" as const,
-                  codigoTarifa: line.ivaRateCode,
-                  tarifa: rate,
-                },
-              ],
-            }
-          : {}),
+        impuesto: [
+          {
+            codigo: "01" as const,
+            codigoTarifa: tariffCode,
+            tarifa: rate,
+          },
+        ],
       };
     });
 
@@ -282,6 +290,7 @@ export class TiquetePayloadBuilder {
 
     return {
       emisorLegalId,
+      ...(substituteKey ? { sustituye: substituteKey } : {}),
       ...(input.codigoActividad?.trim()
         ? { codigoActividad: input.codigoActividad.trim() }
         : {}),

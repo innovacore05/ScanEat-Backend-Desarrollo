@@ -23,6 +23,7 @@
     "@types/nodemailer": "^8.0.1",
     "@types/pg": "^8.20.0",
     "bcrypt": "^6.0.0",
+    "cookie": "^2.0.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "drizzle-orm": "^0.45.2",
@@ -31,10 +32,12 @@
     "express-rate-limit": "^8.6.2",
     "helmet": "^8.2.0",
     "jose": "^6.2.3",
-    "multer": "^2.4.0",
-    "nodemailer": "^9.0.5",
+    "multer": "^2.5.0",
+    "nodemailer": "^10.3.1",
+    "openai": "^7.43.0",
     "pg": "^8.21.0",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.5",
+    "socket.io": "^4.8.4"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
@@ -50,11 +53,12 @@
     "nodemon": "^3.1.14",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "overrides": {
     "@esbuild-kit/core-utils": {
       "esbuild": "0.25.0"
-    }
+    },
+    "minimatch": "^11.0.1"
   }
 }

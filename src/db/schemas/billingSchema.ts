@@ -8,11 +8,13 @@ import{
      timestamp,
      varchar,
      boolean,
+     bigserial,
 type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
 import { businesses,users } from "./userSchema";
 import { orderDetails,orders } from "./orderSchema";
+import { email } from "zod";
 import {z} from "zod";
 
 
@@ -28,27 +30,28 @@ export const invoicingConfig = pgTable("invoicing_config", {
   businessId: integer("business_id")
     .notNull()
     .unique()
-    .references(() => businesses.business_id, { onDelete: "cascade" }),
-  legalId: varchar("legal_id", { length: 20 }).notNull(),
-  legalIdType: varchar("legal_id_type", { length: 2 }).notNull(),
-  legalName: varchar("legal_name", { length: 255 }).notNull(),
-  tradeName: varchar("trade_name", { length: 255 }),
-  activityCode: varchar("activity_code", { length: 10 }),
-  email: varchar("email", { length: 255 }),
-  phone: varchar("phone", { length: 30 }),
-  address: text("address"),
+    .references(()=>businesses.business_id,{onDelete:"cascade"}),
+    legalId:varchar("legal_id",{length:20}).notNull(),
+    legalIdType:varchar("legal_id_type",{length:2}).notNull(),
+    legalName: varchar("legal_name", { length: 255 }).notNull(),
+    tradeName:varchar("trade_name",{length:255}),
+    activityCode:varchar("activity_code",{length:10}),
+    email:varchar("email",{length:255}),
+    phone:varchar("phone",{length:30}),
+    address:text("address"),
 
-  // ubicación
+// --- NUEVOS CAMPOS PARA HACIENDA ---
   province: varchar("province", { length: 2 }),
   canton: varchar("canton", { length: 2 }),
   district: varchar("district", { length: 2 }),
   neighborhood: varchar("neighborhood", { length: 50 }),
-
+  
+ 
   environment: varchar("environment", { length: 15 })
-    .notNull()
-    .default("sandbox"),
+  .notNull()
+  .default("sandbox"),
 
-    //regimen
+ //regimen
       regimeKey: varchar("regime_key", { length: 30 }),
   chargesVat: boolean("charges_vat"),
   regimeVerifiedAt: timestamptz("regime_verified_at"),
@@ -62,7 +65,6 @@ export const invoicingConfig = pgTable("invoicing_config", {
 
 
 //datos del supertipo en la bd que guarda todos los campos de los tipos de documentos
-
 export const receipts=pgTable("receipts",{
     receiptId:serial("receipt_id").primaryKey(),
     businessId:integer("business_id").notNull()
@@ -98,8 +100,7 @@ createdAt:timestamptz("created_at").notNull().defaultNow(),
 });
 
 
-
-
+//_
 export const issuerSchema = z.object({
   legalIdType: z
     .string()
@@ -126,10 +127,6 @@ export const issuerSchema = z.object({
     .max(250),
   environment: z.string().regex(/^(sandbox|production)$/, "Ambiente inválido"),
 });
-
-
-
-//_
 
 //detalles del recivo
 
@@ -167,6 +164,7 @@ export const receiptTaxes = pgTable("receipt_taxes", {
   amount: money("amount").notNull().default("0"),
 });
  
+ 
 // Otros cargos: servicio 10% = charge_type 06
 export const otherCharges = pgTable("other_charges", {
   chargeId: serial("charge_id").primaryKey(),
@@ -178,7 +176,7 @@ export const otherCharges = pgTable("other_charges", {
   percentage: numeric("percentage", { precision: 5, scale: 2 }),
   amount: money("amount").notNull(),
 });
- 
+
 // method: 01 efectivo, 02 tarjeta, 06 SINPE
 export const payments = pgTable("payments", {
   paymentId: serial("payment_id").primaryKey(),
@@ -232,8 +230,7 @@ export const receiptDetailsRelations = relations(
     taxes: many(receiptTaxes),
   }),
 );
- 
-export const receiptTaxesRelations = relations(receiptTaxes, ({ one }) => ({
+ export const receiptTaxesRelations = relations(receiptTaxes, ({ one }) => ({
   detail: one(receiptDetails, {
     fields: [receiptTaxes.detailId],
     references: [receiptDetails.detailId],
@@ -254,6 +251,38 @@ export const paymentsRelations = relations(payments, ({ one }) => ({
   }),
 }));
  
+
+
+
+//schema para la emision con cola y webhook
+
+export const receiptEmissionJobs = pgTable("receipt_emission_jobs", {
+  jobId: bigserial("job_id", { mode: "number" }).primaryKey(),
+
+  receiptId: integer("receipt_id")
+    .notNull()
+    .unique()
+    .references(() => receipts.receiptId, { onDelete: "cascade" }),
+
+  status: varchar("status", { length: 20 })
+    .notNull()
+    .default("pending"),
+
+  attempts: integer("attempts")
+    .notNull()
+    .default(0),
+
+  availableAt: timestamp("available_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+
+  lockedAt: timestamp("locked_at", { withTimezone: true }),
+
+  lastError: text("last_error"),
+});
+
+
+
 export type Receipt = typeof receipts.$inferSelect;
 export type NewReceipt = typeof receipts.$inferInsert;
 export type ReceiptDetail = typeof receiptDetails.$inferSelect;
